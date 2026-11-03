@@ -29,6 +29,7 @@ export type BroadcastItemPayload = {
   provider: string;
   zaloUserId: string;
   displayName?: string | null;
+  threadKind?: 'user' | 'group';
 };
 
 export type Job = {
@@ -65,7 +66,11 @@ export function createBroadcastJob(input: {
   text: string;
   provider: string;
   channelMessageId?: number;
-  targets: Array<{ zaloUserId: string; displayName?: string | null }>;
+  targets: Array<{
+    zaloUserId: string;
+    displayName?: string | null;
+    threadKind?: 'user' | 'group';
+  }>;
 }): { parentId: number; itemIds: number[] } {
   const db = getDb();
   const now = new Date().toISOString();
@@ -104,6 +109,7 @@ export function createBroadcastJob(input: {
         provider: input.provider,
         zaloUserId: t.zaloUserId,
         displayName: t.displayName ?? null,
+        threadKind: t.threadKind ?? 'user',
       };
       const r = insertItem.run(
         parentId,

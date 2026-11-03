@@ -7,7 +7,12 @@ import {
   markInboundEventFailed,
   storeInboundEvent,
 } from '../../db/inbound-events.js';
-import type { NormalizedInbound, ZaloAdapter, ZaloSendResult } from '../types.js';
+import type {
+  NormalizedInbound,
+  SendTextOptions,
+  ZaloAdapter,
+  ZaloSendResult,
+} from '../types.js';
 
 type InboundHandler = (msg: NormalizedInbound) => void | Promise<void>;
 
@@ -168,7 +173,7 @@ export class ZaloBotAdapter implements ZaloAdapter {
     await this.handler(msg);
   }
 
-  sendText(userId: string, text: string): Promise<ZaloSendResult> {
+  sendText(userId: string, text: string, _opts?: SendTextOptions): Promise<ZaloSendResult> {
     return this.queue.enqueue(async () => {
       const res = await fetch(`${this.apiBase}/sendMessage`, {
         method: 'POST',

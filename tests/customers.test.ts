@@ -158,4 +158,18 @@ describe('customers db', () => {
     expect(findByZaloUserId('u-del', 'personal')).toBeNull();
     expect(deleteCustomer('u-del', 'personal')).toBeNull();
   });
+
+  it('stores thread kind for groups', () => {
+    const c = insertCustomer({
+      zaloUserId: 'g1',
+      telegramTopicId: 99,
+      provider: 'personal',
+      displayName: 'Group A',
+      subscriptionStatus: 'approved',
+      threadKind: 'group',
+    });
+    expect(c.threadKind).toBe('group');
+    const patched = updateCustomer('g1', 'personal', { threadKind: 'user' });
+    expect(patched?.threadKind).toBe('user');
+  });
 });

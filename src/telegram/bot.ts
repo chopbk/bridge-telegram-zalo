@@ -63,7 +63,7 @@ function formatCustomerLine(c: Customer, index: number): string {
     .filter(Boolean)
     .join(',');
   const name = c.displayName ?? '(no name)';
-  return `${index}. ${name}\n   zalo=${c.zaloUserId} topic=${c.telegramTopicId} [${flags}]`;
+  return `${index}. [${c.threadKind}] ${name}\n   zalo=${c.zaloUserId} topic=${c.telegramTopicId} [${flags}]`;
 }
 
 function parseBool(raw: string): boolean | null {
@@ -101,8 +101,8 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
         '/zalofriends [page] — bạn bè trên nick Zalo (lấy id để add)',
         '/zalochats [page|n] — chat gần đây (user + group)',
         '/user <zalo_id> — chi tiết 1 khách',
-        '/useradd <zalo_id> [tên] — thêm vào danh sách cho phép',
-        '/useredit <zalo_id> name=.. status=.. muted=0|1 blocked=0|1',
+        '/useradd <zalo_id> [group|user] [tên] — thêm allowlist (group gửi đúng group)',
+        '/useredit <zalo_id> name=.. status=.. kind=group|user muted=0|1 blocked=0|1',
         '/userdel <zalo_id> — xoá khỏi danh sách (+ topic)',
         '/search <query>',
         '',
@@ -356,23 +356,43 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
   bot.command(['useradd', 'user_add'], async (ctx) => {
     if (!(await requireAdmin(ctx))) return;
     const raw = ctx.match?.toString().trim() ?? '';
-    const [zaloId, ...nameParts] = raw.split(/\s+/).filter(Boolean);
+    const parts = raw.split(/\s+/).filter(Boolean);
+    const zaloId = parts[0];
     if (!zaloId) {
       await ctx.reply(
-        'Dùng: /useradd <zalo_id> [tên hiển thị]\n→ thêm vào danh sách cho phép (approved)',
+        [
+          'Dùng: /useradd <zalo_id> [group|user] [tên]',
+          '→ thêm allowlist (approved). Group phải ghi kind=group (hoặc để bot tự nhận).',
+        ].join('\n'),
       );
       return;
     }
+
+    let threadKind: 'user' | 'group' | undefined;
+    let nameParts = parts.slice(1);
+    if (nameParts[0] === 'group' || nameParts[0] === 'user') {
+      threadKind = nameParts[0] as 'user' | 'group';
+      nameParts = nameParts.slice(1);
+    }
+
     try {
+      if (!threadKind && adapter.resolveThreadKind) {
+        threadKind = await adapter.resolveThreadKind(zaloId);
+      }
+      threadKind = threadKind ?? 'user';
+
       const { customer, created } = await addAllowedCustomer(
         ctx.api,
         adapter.mode,
         zaloId,
         nameParts.length ? nameParts.join(' ') : undefined,
+        threadKind,
       );
       await ctx.reply(
         [
-          created ? '✅ Đã thêm khách mới (approved)' : '✅ Đã cập nhật khách → approved',
+          created
+            ? `✅ Đã thêm ${threadKind} mới (approved)`
+            : `✅ Đã cập nhật → approved (${customer.threadKind})`,
           formatCustomerDetail(customer),
         ].join('\n'),
       );
@@ -389,8 +409,9 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
     if (tokens.length < 2) {
       await ctx.reply(
         [
-          'Dùng: /useredit <zalo_id> name=Tên status=approved muted=0 blocked=0',
+          'Dùng: /useredit <zalo_id> name=Tên status=approved kind=group muted=0 blocked=0',
           'status: pending|approved|rejected|unsubscribed',
+          'kind: user|group',
         ].join('\n'),
       );
       return;
@@ -402,6 +423,7 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
       subscriptionStatus?: SubscriptionStatus;
       muted?: boolean;
       blocked?: boolean;
+      threadKind?: 'user' | 'group';
     } = {};
 
     for (const token of tokens.slice(1)) {
@@ -419,6 +441,12 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
           return;
         }
         patch.subscriptionStatus = value as SubscriptionStatus;
+      } else if (key === 'kind' || key === 'thread' || key === 'threadkind') {
+        if (value !== 'user' && value !== 'group') {
+          await ctx.reply('kind phải là user|group');
+          return;
+        }
+        patch.threadKind = value;
       } else if (key === 'muted') {
         const b = parseBool(value);
         if (b == null) {

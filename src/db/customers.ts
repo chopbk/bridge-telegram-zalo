@@ -1,4 +1,9 @@
-import { getDb, type CustomerRow, type SubscriptionStatus } from './client.js';
+import {
+  getDb,
+  type CustomerRow,
+  type SubscriptionStatus,
+  type ThreadKind,
+} from './client.js';
 import type { ZaloMode } from '../zalo/types.js';
 
 export type Customer = {
@@ -10,6 +15,7 @@ export type Customer = {
   blocked: boolean;
   subscriptionStatus: SubscriptionStatus;
   topicMissing: boolean;
+  threadKind: ThreadKind;
   createdAt: string;
   updatedAt: string;
 };
@@ -35,6 +41,7 @@ function mapRow(row: CustomerRow): Customer {
     blocked: row.blocked === 1,
     subscriptionStatus: row.subscription_status,
     topicMissing: row.topic_missing === 1,
+    threadKind: row.thread_kind === 'group' ? 'group' : 'user',
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -172,15 +179,17 @@ export function insertCustomer(input: {
   provider: ZaloMode;
   displayName?: string | null;
   subscriptionStatus?: SubscriptionStatus;
+  threadKind?: ThreadKind;
 }): Customer {
   const now = new Date().toISOString();
   const status = input.subscriptionStatus ?? 'pending';
+  const threadKind = input.threadKind ?? 'user';
   getDb()
     .prepare(
       `INSERT INTO customers
         (provider, zalo_user_id, telegram_topic_id, display_name, muted, blocked,
-         subscription_status, topic_missing, created_at, updated_at)
-       VALUES (?, ?, ?, ?, 0, 0, ?, 0, ?, ?)`,
+         subscription_status, topic_missing, thread_kind, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 0, 0, ?, 0, ?, ?, ?)`,
     )
     .run(
       input.provider,
@@ -188,6 +197,7 @@ export function insertCustomer(input: {
       input.telegramTopicId,
       input.displayName ?? null,
       status,
+      threadKind,
       now,
       now,
     );
@@ -201,6 +211,7 @@ export function tryInsertCustomer(input: {
   provider: ZaloMode;
   displayName?: string | null;
   subscriptionStatus?: SubscriptionStatus;
+  threadKind?: ThreadKind;
 }): { customer: Customer; inserted: boolean } {
   const existing = findByZaloUserId(input.zaloUserId, input.provider);
   if (existing) return { customer: existing, inserted: false };
@@ -348,6 +359,7 @@ export type CustomerPatch = {
   subscriptionStatus?: SubscriptionStatus;
   muted?: boolean;
   blocked?: boolean;
+  threadKind?: ThreadKind;
 };
 
 export function updateCustomer(
@@ -365,14 +377,16 @@ export function updateCustomer(
   const muted = patch.muted !== undefined ? (patch.muted ? 1 : 0) : existing.muted ? 1 : 0;
   const blocked =
     patch.blocked !== undefined ? (patch.blocked ? 1 : 0) : existing.blocked ? 1 : 0;
+  const threadKind = patch.threadKind ?? existing.threadKind;
 
   getDb()
     .prepare(
       `UPDATE customers
-       SET display_name = ?, subscription_status = ?, muted = ?, blocked = ?, updated_at = ?
+       SET display_name = ?, subscription_status = ?, muted = ?, blocked = ?,
+           thread_kind = ?, updated_at = ?
        WHERE zalo_user_id = ? AND provider = ?`,
     )
-    .run(displayName, status, muted, blocked, now, zaloUserId, provider);
+    .run(displayName, status, muted, blocked, threadKind, now, zaloUserId, provider);
 
   return findByZaloUserId(zaloUserId, provider);
 }
@@ -381,6 +395,7 @@ export function formatCustomerDetail(c: Customer): string {
   return [
     `name: ${c.displayName ?? '(không có)'}`,
     `zalo: ${c.zaloUserId}`,
+    `kind: ${c.threadKind}`,
     `topic: ${c.telegramTopicId}`,
     `status: ${c.subscriptionStatus}`,
     `muted: ${c.muted ? 'yes' : 'no'}`,

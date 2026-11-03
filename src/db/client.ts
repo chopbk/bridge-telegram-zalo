@@ -4,6 +4,7 @@ import { dirname } from 'node:path';
 import { getEnv } from '../config/env.js';
 
 export type SubscriptionStatus = 'pending' | 'approved' | 'rejected' | 'unsubscribed';
+export type ThreadKind = 'user' | 'group';
 
 export type CustomerRow = {
   provider: 'bot' | 'personal';
@@ -14,6 +15,7 @@ export type CustomerRow = {
   blocked: number;
   subscription_status: SubscriptionStatus;
   topic_missing: number;
+  thread_kind: ThreadKind;
   created_at: string;
   updated_at: string;
 };
@@ -61,6 +63,16 @@ function migrate(database: DatabaseSync): void {
     database
       .prepare(
         `INSERT INTO schema_meta (key, value) VALUES ('version', '2')
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      )
+      .run();
+  }
+
+  if (version < 3) {
+    migrateToV3(database);
+    database
+      .prepare(
+        `INSERT INTO schema_meta (key, value) VALUES ('version', '3')
          ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
       )
       .run();
@@ -196,6 +208,8 @@ function createCustomersV2(database: DatabaseSync): void {
       subscription_status TEXT NOT NULL DEFAULT 'pending'
         CHECK (subscription_status IN ('pending', 'approved', 'rejected', 'unsubscribed')),
       topic_missing INTEGER NOT NULL DEFAULT 0,
+      thread_kind TEXT NOT NULL DEFAULT 'user'
+        CHECK (thread_kind IN ('user', 'group')),
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       PRIMARY KEY (provider, zalo_user_id)
@@ -205,6 +219,19 @@ function createCustomersV2(database: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS idx_customers_broadcast
       ON customers(provider, subscription_status, muted, blocked);
   `);
+}
+
+function migrateToV3(database: DatabaseSync): void {
+  if (!tableExists(database, 'customers')) {
+    createCustomersV2(database);
+    return;
+  }
+  const cols = columnNames(database, 'customers');
+  if (!cols.has('thread_kind')) {
+    database.exec(
+      `ALTER TABLE customers ADD COLUMN thread_kind TEXT NOT NULL DEFAULT 'user'`,
+    );
+  }
 }
 
 export function closeDb(): void {

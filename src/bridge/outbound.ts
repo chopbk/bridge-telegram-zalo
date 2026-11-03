@@ -32,13 +32,23 @@ export async function forwardTopicToZalo(
   }
 
   try {
-    const result = await adapter.sendText(customer.zaloUserId, text);
+    const result = await adapter.sendText(customer.zaloUserId, text, {
+      threadKind: customer.threadKind,
+    });
     logger.info(
-      { topicId, zaloUserId: customer.zaloUserId, messageId: result.messageId },
+      {
+        topicId,
+        zaloUserId: customer.zaloUserId,
+        threadKind: customer.threadKind,
+        messageId: result.messageId,
+      },
       'Forwarded Telegram topic → Zalo',
     );
   } catch (err) {
-    logger.error({ err, topicId, zaloUserId: customer.zaloUserId }, 'Outbound Tele→Zalo failed');
+    logger.error(
+      { err, topicId, zaloUserId: customer.zaloUserId, threadKind: customer.threadKind },
+      'Outbound Tele→Zalo failed',
+    );
     throw err;
   }
 }

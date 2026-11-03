@@ -51,9 +51,11 @@ async function createTopicAndInsert(
   provider: ZaloMode,
   displayName?: string,
   subscriptionStatus: SubscriptionStatus = 'pending',
+  threadKind: 'user' | 'group' = 'user',
 ): Promise<Customer> {
   const env = getEnv();
-  const title = truncateTopicTitle(displayName || `Zalo ${zaloUserId}`);
+  const prefix = threadKind === 'group' ? 'G' : 'Zalo';
+  const title = truncateTopicTitle(displayName || `${prefix} ${zaloUserId}`);
   const topic = await api.createForumTopic(env.telegramForumGroupId, title);
   const topicId = topic.message_thread_id;
 
@@ -63,6 +65,7 @@ async function createTopicAndInsert(
     provider,
     displayName: displayName ?? null,
     subscriptionStatus,
+    threadKind,
   });
 
   if (!inserted) {
@@ -193,6 +196,7 @@ export async function addAllowedCustomer(
   provider: ZaloMode,
   zaloUserId: string,
   displayName?: string,
+  threadKind: 'user' | 'group' = 'user',
 ): Promise<{ customer: Customer; created: boolean }> {
   const existing = findByZaloUserId(zaloUserId, provider);
   if (existing) {
@@ -200,6 +204,7 @@ export async function addAllowedCustomer(
       updateCustomer(zaloUserId, provider, {
         subscriptionStatus: 'approved',
         blocked: false,
+        threadKind,
         ...(displayName ? { displayName } : {}),
       }) ?? existing;
     return { customer: updated, created: false };
@@ -211,6 +216,7 @@ export async function addAllowedCustomer(
     provider,
     displayName,
     'approved',
+    threadKind,
   );
   return { customer, created: true };
 }

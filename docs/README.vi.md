@@ -82,8 +82,8 @@ Lệnh viết liền (không dấu `_`) để tránh Markdown Telegram làm hỏ
 | `/zalofriends` | Bạn bè trên nick Zalo (personal) — lấy id rồi `/useradd` |
 | `/zalochats` | Chat gần đây (user + group); lọc `/zalochats group` |
 | `/user <zalo_id>` | Chi tiết 1 khách (hoặc `/user` trong topic) |
-| `/useradd <zalo_id> [tên]` | Thêm vào danh sách cho phép + tạo topic |
-| `/useredit <zalo_id> name=Tên status=approved muted=0 blocked=0` | Sửa |
+| `/useradd <zalo_id> [group\|user] [tên]` | Thêm allowlist; group gửi bằng ThreadType.Group |
+| `/useredit <zalo_id> name=Tên kind=group status=approved` | Sửa (kind=user\|group) |
 | `/userdel <zalo_id>` | Xoá khỏi DB (+ xoá topic nếu được) |
 | `/search <query>` | Tìm theo tên / zalo id |
 | `/list [page] [status]` | Alias list cũ |

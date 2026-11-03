@@ -6,9 +6,11 @@ import { notifyAdmins } from '../../telegram/notify.js';
 import { getZaloApi, resetZaloClient } from './session.js';
 import type {
   NormalizedInbound,
+  SendTextOptions,
   ZaloAdapter,
   ZaloContact,
   ZaloSendResult,
+  ZaloThreadKind,
 } from '../types.js';
 
 type InboundHandler = (msg: NormalizedInbound) => void | Promise<void>;
@@ -189,20 +191,41 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
     return items.slice(0, Math.min(items.length, capped * 2));
   }
 
-  sendText(userId: string, text: string): Promise<ZaloSendResult> {
+  async resolveThreadKind(zaloId: string): Promise<ZaloThreadKind> {
+    try {
+      const api = await getZaloApi();
+      const info = await api.getGroupInfo(zaloId);
+      if (info?.gridInfoMap && info.gridInfoMap[zaloId]) {
+        return 'group';
+      }
+    } catch (err) {
+      logger.warn({ err, zaloId }, 'resolveThreadKind getGroupInfo failed — assume user');
+    }
+    return 'user';
+  }
+
+  sendText(userId: string, text: string, opts?: SendTextOptions): Promise<ZaloSendResult> {
+    const threadKind = opts?.threadKind ?? 'user';
+    const threadType = threadKind === 'group' ? ThreadType.Group : ThreadType.User;
     return this.queue.enqueue(async () => {
       try {
         const api = await getZaloApi();
-        const result = await api.sendMessage(text, userId, ThreadType.User);
+        const result = await api.sendMessage(text, userId, threadType);
         const messageId = result.message?.msgId;
+        logger.info(
+          { userId, threadKind, messageId },
+          'Personal Zalo sendText ok',
+        );
         return {
           messageId: messageId !== undefined && messageId !== null ? String(messageId) : 'ok',
         };
       } catch (err) {
         resetZaloClient();
-        logger.error({ err, userId }, 'Personal Zalo send failed');
+        logger.error({ err, userId, threadKind }, 'Personal Zalo send failed');
         const message = err instanceof Error ? err.message : String(err);
-        void notifyAdmins(`Zalo personal send failed for ${userId}: ${message}`);
+        void notifyAdmins(
+          `Zalo personal send failed for ${userId} (${threadKind}): ${message}`,
+        );
         throw err;
       }
     });

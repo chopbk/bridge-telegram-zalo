@@ -39,6 +39,7 @@ export async function broadcastChannelText(
     targets: targets.map((t) => ({
       zaloUserId: t.zaloUserId,
       displayName: t.displayName,
+      threadKind: t.threadKind,
     })),
   });
 
@@ -113,7 +114,9 @@ export async function drainBroadcastItems(
     }
 
     try {
-      await adapter.sendText(payload.zaloUserId, payload.text);
+      await adapter.sendText(payload.zaloUserId, payload.text, {
+        threadKind: payload.threadKind ?? 'user',
+      });
       markJobDone(job.id);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
