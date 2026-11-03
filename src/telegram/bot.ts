@@ -43,10 +43,15 @@ function inForumGroup(ctx: Context): boolean {
   return ctx.chat?.id === getEnv().telegramForumGroupId;
 }
 
-async function requireAdminInForum(ctx: Context): Promise<boolean> {
-  if (!inForumGroup(ctx)) return false;
+function isPrivateChat(ctx: Context): boolean {
+  return ctx.chat?.type === 'private';
+}
+
+/** Admin được dùng lệnh trong forum group hoặc chat riêng với bot. */
+async function requireAdmin(ctx: Context): Promise<boolean> {
   if (!isAdmin(ctx)) return false;
-  return true;
+  if (isPrivateChat(ctx) || inForumGroup(ctx)) return true;
+  return false;
 }
 
 function formatCustomerLine(c: Customer, index: number): string {
@@ -92,13 +97,15 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
   const bot = new Bot(env.TELEGRAM_BOT_TOKEN);
 
   bot.command('help', async (ctx) => {
-    if (!(await requireAdminInForum(ctx))) return;
+    if (!(await requireAdmin(ctx))) return;
     await ctx.reply(
       [
+        'Dùng trong forum hoặc chat riêng với bot (admin).',
+        '',
         'Quản lý người dùng Zalo:',
         '/users [page] [all|allowed|pending|ids] — đã ghi nhận trong bridge',
         '/zalo_friends [page] — bạn bè trên nick Zalo (lấy id để add)',
-        '/zalo_chats [page|n] — người chat gần đây (1-1)',
+        '/zalo_chats [page|n] — chat gần đây (user + group)',
         '/user <zalo_id> — chi tiết 1 khách',
         '/user_add <zalo_id> [tên] — thêm vào danh sách cho phép',
         '/user_edit <zalo_id> name=.. status=.. muted=0|1 blocked=0|1',
@@ -114,12 +121,12 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
   });
 
   bot.command('mode', async (ctx) => {
-    if (!(await requireAdminInForum(ctx))) return;
+    if (!(await requireAdmin(ctx))) return;
     await ctx.reply(`ZALO_MODE=${adapter.mode}`);
   });
 
   bot.command('status', async (ctx) => {
-    if (!(await requireAdminInForum(ctx))) return;
+    if (!(await requireAdmin(ctx))) return;
     const customers = allCustomers(adapter.mode);
     const byStatus = countByStatus(adapter.mode);
     const targets = customers.filter(
@@ -140,7 +147,7 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
 
   /** Danh sách người dùng Zalo đã chat — dễ copy zalo id */
   bot.command('users', async (ctx) => {
-    if (!(await requireAdminInForum(ctx))) return;
+    if (!(await requireAdmin(ctx))) return;
     const raw = ctx.match?.toString().trim() ?? '';
     const parts = raw.split(/\s+/).filter(Boolean);
 
@@ -192,7 +199,7 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
   });
 
   bot.command('list', async (ctx) => {
-    if (!(await requireAdminInForum(ctx))) return;
+    if (!(await requireAdmin(ctx))) return;
     const raw = ctx.match?.toString().trim() ?? '';
     const parts = raw.split(/\s+/).filter(Boolean);
     let page = 1;
@@ -219,7 +226,7 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
    * Dùng để lấy zalo_id rồi /user_add.
    */
   bot.command('zalo_friends', async (ctx) => {
-    if (!(await requireAdminInForum(ctx))) return;
+    if (!(await requireAdmin(ctx))) return;
     if (!adapter.listContacts) {
       await ctx.reply('Lệnh này chỉ có ở ZALO_MODE=personal.');
       return;
@@ -254,10 +261,10 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
   });
 
   /**
-   * Người đã chat gần đây với nick Zalo (1-1), theo lastActionTime.
+   * Chat gần đây với nick Zalo (1-1 + group).
    */
   bot.command('zalo_chats', async (ctx) => {
-    if (!(await requireAdminInForum(ctx))) return;
+    if (!(await requireAdmin(ctx))) return;
     if (!adapter.listRecentChats) {
       await ctx.reply('Lệnh này chỉ có ở ZALO_MODE=personal.');
       return;
@@ -267,6 +274,15 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
     const parts = raw.split(/\s+/).filter(Boolean);
     let page = 1;
     let limit = 50;
+    let filter: 'all' | 'user' | 'group' = 'all';
+    for (const p of parts) {
+      if (p === 'user' || p === 'users' || p === 'friend' || p === 'friends') filter = 'user';
+      else if (p === 'group' || p === 'groups') filter = 'group';
+      else if (p.startsWith('n=') || p.startsWith('limit=')) {
+        const n = Number(p.split('=')[1]);
+        if (Number.isFinite(n)) limit = Math.min(200, Math.max(1, n));
+      }
+    }
     const nums = parts.filter((p) => /^\d+$/.test(p)).map(Number);
     if (nums.length === 1) {
       const n = nums[0]!;
@@ -276,21 +292,18 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
       page = Math.max(1, nums[0]!);
       limit = Math.min(200, Math.max(1, nums[1]!));
     }
-    for (const p of parts) {
-      if (p.startsWith('n=') || p.startsWith('limit=')) {
-        const n = Number(p.split('=')[1]);
-        if (Number.isFinite(n)) limit = Math.min(200, Math.max(1, n));
-      }
-    }
 
     const pageSize = env.LIST_PAGE_SIZE;
 
     try {
-      await ctx.reply('Đang lấy danh sách chat gần đây…');
-      const chats = await adapter.listRecentChats(limit);
+      await ctx.reply('Đang lấy danh sách chat gần đây (user + group)…');
+      let chats = await adapter.listRecentChats(limit);
+      if (filter === 'user') chats = chats.filter((c) => c.kind !== 'group');
+      if (filter === 'group') chats = chats.filter((c) => c.kind === 'group');
+
       if (chats.length === 0) {
         await ctx.reply(
-          'Không có chat gần đây (lastActionTime rỗng).\nThử /zalo_friends hoặc nhờ người nhắn Zalo.',
+          'Không có chat gần đây.\nThử /zalo_friends hoặc `/zalo_chats group`.',
         );
         return;
       }
@@ -299,14 +312,19 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
       const safePage = Math.min(page, totalPages);
       const start = (safePage - 1) * pageSize;
       const slice = chats.slice(start, start + pageSize);
+      const userCount = chats.filter((c) => c.kind !== 'group').length;
+      const groupCount = chats.filter((c) => c.kind === 'group').length;
       const lines = [
-        `Chat gần đây (1-1) — trang ${safePage}/${totalPages} (top ${chats.length})`,
-        'Thêm vào bridge: /user_add <zalo_id> [tên]',
+        `Chat gần đây — trang ${safePage}/${totalPages} (${chats.length}: ${userCount} user, ${groupCount} group)`,
+        'User → /user_add <zalo_id> [tên] · lọc: /zalo_chats user | /zalo_chats group',
         ...slice.map((c, i) => {
+          const kind = c.kind === 'group' ? 'group' : 'user';
+          const extra =
+            kind === 'group' && c.memberCount != null ? ` · ${c.memberCount} mem` : '';
           const when = c.lastActiveAt
             ? new Date(c.lastActiveAt).toLocaleString('vi-VN', { hour12: false })
             : '?';
-          return `${start + i + 1}. ${c.displayName}\n   zalo=\`${c.zaloUserId}\` · ${when}`;
+          return `${start + i + 1}. [${kind}] ${c.displayName}\n   id=\`${c.zaloUserId}\`${extra} · ${when}`;
         }),
       ];
       await replyChunks(ctx, lines.join('\n'));
@@ -317,7 +335,7 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
   });
 
   bot.command('user', async (ctx) => {
-    if (!(await requireAdminInForum(ctx))) return;
+    if (!(await requireAdmin(ctx))) return;
     const zaloId = ctx.match?.toString().trim().split(/\s+/)[0] ?? '';
     if (!zaloId) {
       const topicId = ctx.message?.message_thread_id;
@@ -342,7 +360,7 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
   });
 
   bot.command('user_add', async (ctx) => {
-    if (!(await requireAdminInForum(ctx))) return;
+    if (!(await requireAdmin(ctx))) return;
     const raw = ctx.match?.toString().trim() ?? '';
     const [zaloId, ...nameParts] = raw.split(/\s+/).filter(Boolean);
     if (!zaloId) {
@@ -371,7 +389,7 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
   });
 
   bot.command('user_edit', async (ctx) => {
-    if (!(await requireAdminInForum(ctx))) return;
+    if (!(await requireAdmin(ctx))) return;
     const raw = ctx.match?.toString().trim() ?? '';
     const tokens = raw.split(/\s+/).filter(Boolean);
     if (tokens.length < 2) {
@@ -441,7 +459,7 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
   });
 
   bot.command('user_del', async (ctx) => {
-    if (!(await requireAdminInForum(ctx))) return;
+    if (!(await requireAdmin(ctx))) return;
     const zaloId = ctx.match?.toString().trim().split(/\s+/)[0] ?? '';
     if (!zaloId) {
       await ctx.reply('Dùng: /user_del <zalo_id>\nXoá khỏi DB và cố gắng xoá topic Telegram.');
@@ -463,7 +481,7 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
   });
 
   bot.command('search', async (ctx) => {
-    if (!(await requireAdminInForum(ctx))) return;
+    if (!(await requireAdmin(ctx))) return;
     const q = ctx.match?.toString().trim() ?? '';
     if (!q) {
       await ctx.reply('Dùng: /search <tên hoặc zalo id>');
@@ -482,7 +500,7 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
     status: SubscriptionStatus,
     okLabel: string,
   ): Promise<void> {
-    if (!(await requireAdminInForum(ctx))) return;
+    if (!(await requireAdmin(ctx))) return;
     const arg = ctx.match?.toString().trim().split(/\s+/)[0];
     if (arg) {
       const customer = setStatusByZaloId(arg, adapter.mode, status);
@@ -517,7 +535,7 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
   });
 
   bot.command('block', async (ctx) => {
-    if (!(await requireAdminInForum(ctx))) return;
+    if (!(await requireAdmin(ctx))) return;
     const arg = ctx.match?.toString().trim().split(/\s+/)[0];
     if (arg) {
       const updated = editCustomer(arg, adapter.mode, { blocked: true });
@@ -542,7 +560,7 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
   });
 
   bot.command('unblock', async (ctx) => {
-    if (!(await requireAdminInForum(ctx))) return;
+    if (!(await requireAdmin(ctx))) return;
     const arg = ctx.match?.toString().trim().split(/\s+/)[0];
     if (arg) {
       const updated = editCustomer(arg, adapter.mode, { blocked: false });
@@ -567,7 +585,7 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
   });
 
   bot.command('mute', async (ctx) => {
-    if (!(await requireAdminInForum(ctx))) return;
+    if (!(await requireAdmin(ctx))) return;
     const arg = ctx.match?.toString().trim().split(/\s+/)[0];
     if (arg) {
       const updated = editCustomer(arg, adapter.mode, { muted: true });
@@ -592,7 +610,7 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
   });
 
   bot.command('unmute', async (ctx) => {
-    if (!(await requireAdminInForum(ctx))) return;
+    if (!(await requireAdmin(ctx))) return;
     const arg = ctx.match?.toString().trim().split(/\s+/)[0];
     if (arg) {
       const updated = editCustomer(arg, adapter.mode, { muted: false });
@@ -617,7 +635,7 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
   });
 
   bot.command('recreate', async (ctx) => {
-    if (!(await requireAdminInForum(ctx))) return;
+    if (!(await requireAdmin(ctx))) return;
     const topicId = ctx.message?.message_thread_id;
     if (!topicId) {
       await ctx.reply('Dùng /recreate trong topic khách (hoặc topic cũ).');
@@ -639,7 +657,7 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
   });
 
   bot.command('retry_broadcast', async (ctx) => {
-    if (!(await requireAdminInForum(ctx))) return;
+    if (!(await requireAdmin(ctx))) return;
     const idRaw = ctx.match?.toString().trim() ?? '';
     const jobId = Number(idRaw);
     if (!Number.isFinite(jobId) || jobId <= 0) {

@@ -34,8 +34,18 @@ declare module 'zca-js' {
       type?: ThreadType,
     ) => Promise<{ message?: { msgId?: string | number } }>;
     getAllFriends: (count?: number, page?: number) => Promise<ZaloFriend[]>;
+    getAllGroups: () => Promise<{ gridVerMap?: Record<string, string> }>;
+    getGroupInfo: (groupId: string | string[]) => Promise<{
+      gridInfoMap?: Record<
+        string,
+        { name?: string; totalMember?: number; createdTime?: number }
+      >;
+    }>;
     getUnreadMark?: () => Promise<{
-      data?: { convsUser?: Array<{ id?: number | string; fromUid?: number | string; ts?: number }> };
+      data?: {
+        convsUser?: Array<{ id?: number | string; fromUid?: number | string; ts?: number }>;
+        convsGroup?: Array<{ id?: number | string; fromUid?: number | string; ts?: number }>;
+      };
     }>;
     getPinConversations?: () => Promise<{ conversations?: string[] }>;
     getUserInfo?: (

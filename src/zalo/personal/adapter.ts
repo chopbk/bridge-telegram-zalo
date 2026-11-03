@@ -99,43 +99,94 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
   }
 
   /**
-   * Recent 1-1 chats approximated via friends.lastActionTime
-   * (same approach as zca-based CLIs — Zalo has no public "recent chats" API).
+   * Recent chats: 1-1 (friends.lastActionTime) + groups (getAllGroups).
+   * Zalo has no dedicated "recent chats" API — same approach as zca CLIs.
    */
-  async listRecentChats(limit = 30): Promise<ZaloContact[]> {
+  async listRecentChats(limit = 50): Promise<ZaloContact[]> {
     const api = await getZaloApi();
-    const friends = await api.getAllFriends();
     const capped = Math.max(1, Math.min(limit, 200));
+    const items: ZaloContact[] = [];
 
-    const byActivity = [...(friends ?? [])]
+    const friends = await api.getAllFriends();
+    const users = [...(friends ?? [])]
       .filter((f) => (f.lastActionTime ?? 0) > 0)
       .sort((a, b) => (b.lastActionTime ?? 0) - (a.lastActionTime ?? 0))
       .slice(0, capped)
-      .map((f) => mapFriend(f));
+      .map((f) => ({ ...mapFriend(f), kind: 'user' as const }));
+    items.push(...users);
 
-    // Prefer unread 1-1 marks at the top when available
     try {
-      if (typeof api.getUnreadMark === 'function') {
-        const unread = await api.getUnreadMark();
-        const unreadIds = new Set(
-          (unread?.data?.convsUser ?? [])
-            .map((u) => String(u.fromUid ?? u.id ?? ''))
-            .filter(Boolean),
-        );
-        if (unreadIds.size > 0) {
-          byActivity.sort((a, b) => {
-            const au = unreadIds.has(a.zaloUserId) ? 1 : 0;
-            const bu = unreadIds.has(b.zaloUserId) ? 1 : 0;
-            if (au !== bu) return bu - au;
-            return (b.lastActiveAt ?? 0) - (a.lastActiveAt ?? 0);
-          });
+      const groupsResult = await api.getAllGroups();
+      const groupIds = Object.keys(groupsResult?.gridVerMap ?? {});
+      const take = groupIds.slice(0, capped);
+      const batchSize = 40;
+      for (let i = 0; i < take.length; i += batchSize) {
+        const batch = take.slice(i, i + batchSize);
+        try {
+          const info = await api.getGroupInfo(batch);
+          const map = info?.gridInfoMap ?? {};
+          for (const [gid, g] of Object.entries(map)) {
+            items.push({
+              zaloUserId: String(gid),
+              displayName: g.name || `Group ${gid}`,
+              kind: 'group',
+              memberCount: g.totalMember,
+              lastActiveAt: normalizeZaloTs(g.createdTime),
+            });
+          }
+        } catch (err) {
+          logger.warn({ err, batchSize: batch.length }, 'getGroupInfo batch failed');
         }
       }
     } catch (err) {
-      logger.warn({ err }, 'getUnreadMark failed — listing by lastActionTime only');
+      logger.warn({ err }, 'getAllGroups failed — returning users only');
     }
 
-    return byActivity;
+    const unreadUser = new Set<string>();
+    const unreadGroup = new Set<string>();
+    const pinned = new Set<string>();
+
+    try {
+      if (typeof api.getUnreadMark === 'function') {
+        const unread = await api.getUnreadMark();
+        for (const u of unread?.data?.convsUser ?? []) {
+          const id = String(u.fromUid ?? u.id ?? '');
+          if (id) unreadUser.add(id);
+        }
+        for (const g of unread?.data?.convsGroup ?? []) {
+          const id = String(g.id ?? g.fromUid ?? '');
+          if (id) unreadGroup.add(id);
+        }
+      }
+    } catch (err) {
+      logger.warn({ err }, 'getUnreadMark failed');
+    }
+
+    try {
+      if (typeof api.getPinConversations === 'function') {
+        const pin = await api.getPinConversations();
+        for (const raw of pin?.conversations ?? []) {
+          if (raw.startsWith('u') || raw.startsWith('g')) pinned.add(raw.slice(1));
+          else pinned.add(raw);
+        }
+      }
+    } catch (err) {
+      logger.warn({ err }, 'getPinConversations failed');
+    }
+
+    const score = (c: ZaloContact): number => {
+      let s = c.lastActiveAt ?? 0;
+      const isUnread =
+        c.kind === 'group' ? unreadGroup.has(c.zaloUserId) : unreadUser.has(c.zaloUserId);
+      if (isUnread) s += 1e15;
+      if (pinned.has(c.zaloUserId)) s += 1e14;
+      // Prefer users slightly when scores equal-ish (users have real lastActionTime)
+      if (c.kind === 'user') s += 1e10;
+      return s;
+    };
+
+    items.sort((a, b) => score(b) - score(a));
+    return items.slice(0, Math.min(items.length, capped * 2));
   }
 
   sendText(userId: string, text: string): Promise<ZaloSendResult> {
@@ -187,5 +238,6 @@ function mapFriend(f: {
     displayName: f.displayName || f.zaloName || f.username || String(f.userId),
     zaloName: f.zaloName || undefined,
     lastActiveAt: normalizeZaloTs(f.lastActionTime),
+    kind: 'user',
   };
 }

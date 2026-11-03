@@ -66,7 +66,7 @@ Khách **phải nhắn bot Zalo trước** mới nhận/gửi được.
 
 ## Lệnh admin (Telegram)
 
-Chỉ trong **forum group** và user thuộc `TELEGRAM_ADMIN_IDS`. Gõ `/help` để xem nhanh.
+Chỉ user thuộc `TELEGRAM_ADMIN_IDS`, trong **forum group** hoặc **chat riêng với bot**. Gõ `/help` để xem nhanh.
 
 ### Danh sách & CRUD người dùng Zalo
 
@@ -78,7 +78,7 @@ Chỉ trong **forum group** và user thuộc `TELEGRAM_ADMIN_IDS`. Gõ `/help` �
 | `/users ids` | Chỉ in các Zalo ID (dễ copy) |
 | `/users 2` | Trang 2 |
 | `/zalo_friends` | Bạn bè trên nick Zalo (personal) — lấy id rồi `/user_add` |
-| `/zalo_chats` | Người chat gần đây 1-1 (theo tương tác Zalo) |
+| `/zalo_chats` | Chat gần đây (user + group); lọc `/zalo_chats group` |
 | `/user <zalo_id>` | Chi tiết 1 khách (hoặc `/user` trong topic) |
 | `/user_add <zalo_id> [tên]` | Thêm vào danh sách cho phép + tạo topic |
 | `/user_edit <zalo_id> name=Tên status=approved muted=0 blocked=0` | Sửa |
