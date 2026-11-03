@@ -19,12 +19,20 @@ declare module 'zca-js' {
     language?: string;
   };
 
+  export type ZaloFriend = {
+    userId: string;
+    username?: string;
+    displayName?: string;
+    zaloName?: string;
+  };
+
   export type API = {
     sendMessage: (
       message: string | { msg: string },
       threadId: string,
       type?: ThreadType,
     ) => Promise<{ message?: { msgId?: string | number } }>;
+    getAllFriends: (count?: number, page?: number) => Promise<ZaloFriend[]>;
     listener: {
       on: (event: 'message', handler: (message: ZaloListenerMessage) => void) => void;
       start: () => void;

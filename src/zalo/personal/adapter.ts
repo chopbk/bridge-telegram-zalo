@@ -4,7 +4,12 @@ import logger from '../../config/logger.js';
 import { SendQueue } from '../../bridge/queue.js';
 import { notifyAdmins } from '../../telegram/notify.js';
 import { getZaloApi, resetZaloClient } from './session.js';
-import type { NormalizedInbound, ZaloAdapter, ZaloSendResult } from '../types.js';
+import type {
+  NormalizedInbound,
+  ZaloAdapter,
+  ZaloContact,
+  ZaloSendResult,
+} from '../types.js';
 
 type InboundHandler = (msg: NormalizedInbound) => void | Promise<void>;
 
@@ -85,6 +90,16 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
       messageId,
       unsupportedKind: kind,
     });
+  }
+
+  async listContacts(): Promise<ZaloContact[]> {
+    const api = await getZaloApi();
+    const friends = await api.getAllFriends();
+    return (friends ?? []).map((f) => ({
+      zaloUserId: String(f.userId),
+      displayName: f.displayName || f.zaloName || f.username || String(f.userId),
+      zaloName: f.zaloName || undefined,
+    }));
   }
 
   sendText(userId: string, text: string): Promise<ZaloSendResult> {

@@ -72,11 +72,12 @@ Chỉ trong **forum group** và user thuộc `TELEGRAM_ADMIN_IDS`. Gõ `/help` �
 
 | Lệnh | Ý nghĩa |
 |------|---------|
-| `/users` | Danh sách người đã chat (có `zalo=…` để copy) |
+| `/users` | Khách đã ghi nhận trong bridge DB (có `zalo=…`) |
 | `/users allowed` | Chỉ danh sách cho phép (approved) |
 | `/users pending` | Chờ duyệt |
 | `/users ids` | Chỉ in các Zalo ID (dễ copy) |
 | `/users 2` | Trang 2 |
+| `/zalo_friends` | Bạn bè trên nick Zalo (personal) — lấy id rồi `/user_add` |
 | `/user <zalo_id>` | Chi tiết 1 khách (hoặc `/user` trong topic) |
 | `/user_add <zalo_id> [tên]` | Thêm vào danh sách cho phép + tạo topic |
 | `/user_edit <zalo_id> name=Tên status=approved muted=0 blocked=0` | Sửa |

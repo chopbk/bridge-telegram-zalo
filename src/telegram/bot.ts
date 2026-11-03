@@ -96,7 +96,8 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
     await ctx.reply(
       [
         'Quản lý người dùng Zalo:',
-        '/users [page] [all|allowed|pending|ids] — danh sách đã chat',
+        '/users [page] [all|allowed|pending|ids] — đã ghi nhận trong bridge',
+        '/zalo_friends [page] — bạn bè trên nick Zalo (lấy id để add)',
         '/user <zalo_id> — chi tiết 1 khách',
         '/user_add <zalo_id> [tên] — thêm vào danh sách cho phép',
         '/user_edit <zalo_id> name=.. status=.. muted=0|1 blocked=0|1',
@@ -153,14 +154,15 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
     if (mode === 'ids') {
       const all = allCustomers(adapter.mode);
       if (all.length === 0) {
-        await ctx.reply('Chưa có khách nào.');
+        await ctx.reply(emptyUsersHint(adapter.mode));
         return;
       }
       await replyChunks(
         ctx,
-        [`Zalo IDs (${all.length}) — đã chat / có trong DB:`, ...all.map((c) => c.zaloUserId)].join(
-          '\n',
-        ),
+        [
+          `Zalo IDs (${all.length}) — đã ghi nhận trong bridge DB:`,
+          ...all.map((c) => c.zaloUserId),
+        ].join('\n'),
       );
       return;
     }
@@ -172,8 +174,8 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
     if (result.total === 0) {
       await ctx.reply(
         mode === 'allowed'
-          ? 'Chưa có ai trong danh sách cho phép (approved).'
-          : 'Chưa có khách nào.',
+          ? 'Chưa có ai trong danh sách cho phép (approved).\nThêm: /user_add <zalo_id> hoặc /zalo_friends rồi add.'
+          : emptyUsersHint(adapter.mode),
       );
       return;
     }
@@ -209,6 +211,45 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
     );
     const header = `Trang ${result.page}/${totalPages} (${result.total} khách)${status ? ` filter=${status}` : ''}`;
     await replyChunks(ctx, [header, ...lines].join('\n'));
+  });
+
+  /**
+   * Danh sách bạn bè trên nick Zalo (API), không phải bridge DB.
+   * Dùng để lấy zalo_id rồi /user_add.
+   */
+  bot.command('zalo_friends', async (ctx) => {
+    if (!(await requireAdminInForum(ctx))) return;
+    if (!adapter.listContacts) {
+      await ctx.reply('Lệnh này chỉ có ở ZALO_MODE=personal.');
+      return;
+    }
+    const raw = ctx.match?.toString().trim() ?? '';
+    const page = Math.max(1, Number(raw.split(/\s+/).find((p) => /^\d+$/.test(p)) ?? 1) || 1);
+    const pageSize = env.LIST_PAGE_SIZE;
+
+    try {
+      await ctx.reply('Đang lấy danh sách bạn bè Zalo…');
+      const contacts = await adapter.listContacts();
+      if (contacts.length === 0) {
+        await ctx.reply('Nick Zalo không có bạn bè (hoặc API trả rỗng).');
+        return;
+      }
+      const totalPages = Math.max(1, Math.ceil(contacts.length / pageSize));
+      const start = (page - 1) * pageSize;
+      const slice = contacts.slice(start, start + pageSize);
+      const lines = [
+        `Bạn bè Zalo — trang ${page}/${totalPages} (${contacts.length})`,
+        'Thêm vào bridge: /user_add <zalo_id> [tên]',
+        ...slice.map(
+          (c, i) =>
+            `${start + i + 1}. ${c.displayName}\n   zalo=\`${c.zaloUserId}\`${c.zaloName ? ` (@${c.zaloName})` : ''}`,
+        ),
+      ];
+      await replyChunks(ctx, lines.join('\n'));
+    } catch (err) {
+      logger.error({ err }, 'zalo_friends failed');
+      await ctx.reply('Lấy bạn bè Zalo thất bại. Kiểm tra session / log.');
+    }
   });
 
   bot.command('user', async (ctx) => {
@@ -602,6 +643,21 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
   });
 
   return bot;
+}
+
+function emptyUsersHint(mode: string): string {
+  return [
+    'Bridge DB chưa có khách nào.',
+    '',
+    'Lưu ý: /users ≠ lịch sử chat Zalo cũ.',
+    'Chỉ ghi nhận khi:',
+    '• Có người nhắn nick Zalo trong lúc bridge đang chạy, hoặc',
+    '• Admin /user_add <zalo_id>',
+    '',
+    mode === 'personal'
+      ? 'Xem bạn bè Zalo hiện tại: /zalo_friends'
+      : 'Thêm thủ công: /user_add <zalo_id>',
+  ].join('\n');
 }
 
 export async function startTelegramBot(bot: Bot): Promise<void> {
