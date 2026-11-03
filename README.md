@@ -17,9 +17,11 @@ Bridge **Telegram ↔ Zalo**: one forum topic per customer, topic replies go to 
 
 ```bash
 cp .env.example .env
-# fill TELEGRAM_* (including ADMIN_IDS) and credentials for your chosen mode
+# fill TELEGRAM_BOT_TOKEN first, then discover chat ids:
 npm install
-npm run zalo:login   # personal mode
+npm run telegram:ids    # stop bridge first; /id in group / private / channel
+# fill TELEGRAM_FORUM_GROUP_ID, TELEGRAM_CHANNEL_ID, TELEGRAM_ADMIN_IDS
+npm run zalo:login      # personal mode
 npm run dev
 ```
 
@@ -99,20 +101,21 @@ Only users in `TELEGRAM_ADMIN_IDS`, in the **forum group** or **private chat wit
 | Command | Description |
 |---------|-------------|
 | `/mode` `/status` | Mode / stats |
+| `/config` `/settings` `/check` | Current env + live check forum/channel bot rights |
 | `/recreate` | Recreate deleted forum topic |
 | `/retrybroadcast <jobId>` | Resend failed broadcast items |
 
-Topic text replies forward to Zalo **only for admins**, and only when the customer is approved.
+Topic replies (text + ảnh) forward to Zalo **only for admins**, and only when the customer is approved.
 
 ## Message flows
 
 | Flow | Behavior |
 |------|----------|
-| A | Customer → Zalo → topic; register/unsubscribe; unsupported media → notify topic |
-| B | Admin reply in topic → Zalo (if approved) |
+| A | Customer → Zalo → topic (text + ảnh); register/unsubscribe; media khác → báo topic |
+| B | Admin reply trong topic → Zalo: text, 1 ảnh, hoặc album nhiều ảnh (nếu approved) |
 | C | Channel text → SQLite jobs fan-out + admin report (ok/fail) |
 
-MVP **sends** text only; inbound non-text is reported on Telegram.
+Ảnh 2 chiều (personal mode): Zalo `chat.photo` → Telegram `sendPhoto`/`sendMediaGroup`; Telegram photo/album → Zalo `sendMessage` attachments.
 
 ## Reliability
 
@@ -137,6 +140,8 @@ npm run pm2:start
 | `npm run build` / `start` | Build & run `dist/` |
 | `npm test` | Vitest |
 | `npm run zalo:login` | Personal QR login |
+| `npm run telegram:ids` | Discover group/channel/user ids (stop bridge first) |
+| `npm run telegram:chat -- <id\|@user>` | Resolve one chat id / username |
 
 ## License
 

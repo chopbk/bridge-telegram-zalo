@@ -26,6 +26,7 @@ import {
 } from '../db/customers.js';
 import type { SubscriptionStatus } from '../db/client.js';
 import type { ZaloAdapter, ZaloImageAttachment } from '../zalo/types.js';
+import { buildConfigReport } from './config-report.js';
 
 /** Gom album Telegram (media_group_id) trước khi gửi Zalo */
 type PendingAlbum = {
@@ -120,7 +121,7 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
         'Trong topic hoặc kèm zalo_id:',
         '/approve [/reject /block /unblock /mute /unmute] [zalo_id]',
         '',
-        'Khác: /status /mode /list /recreate /retrybroadcast <jobId>',
+        'Khác: /status /mode /config /list /recreate /retrybroadcast <jobId>',
       ].join('\n'),
     );
   });
@@ -146,10 +147,22 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
         `broadcast targets: ${targets}`,
         `forum: ${env.telegramForumGroupId}`,
         `channel: ${env.telegramChannelId}`,
+        'Chi tiết cấu hình: /config',
       ].join('\n'),
     );
   });
 
+  bot.command(['config', 'settings', 'check'], async (ctx) => {
+    if (!(await requireAdmin(ctx))) return;
+    try {
+      const report = await buildConfigReport(ctx.api, adapter);
+      await replyChunks(ctx, report);
+    } catch (err) {
+      logger.error({ err }, 'config report failed');
+      const detail = err instanceof Error ? err.message : 'Không lấy được cấu hình.';
+      await ctx.reply(detail);
+    }
+  });
 
   /** Danh sách người dùng Zalo đã chat — dễ copy zalo id */
   bot.command('users', async (ctx) => {

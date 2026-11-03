@@ -17,9 +17,11 @@ Bridge **Telegram ↔ Zalo**: mỗi khách một forum topic, reply topic → Za
 
 ```bash
 cp .env.example .env
-# điền TELEGRAM_* (kèm ADMIN_IDS) và credential theo mode
+# điền TELEGRAM_BOT_TOKEN trước, rồi lấy id chat:
 npm install
-npm run zalo:login   # nếu personal
+npm run telegram:ids    # tắt bridge trước; gõ /id trong group / chat riêng / channel
+# điền TELEGRAM_FORUM_GROUP_ID, TELEGRAM_CHANNEL_ID, TELEGRAM_ADMIN_IDS
+npm run zalo:login      # nếu personal
 npm run dev
 ```
 
@@ -107,6 +109,7 @@ Lệnh viết liền (không dấu `_`) để tránh Markdown Telegram làm hỏ
 | Lệnh | Ý nghĩa |
 |------|---------|
 | `/mode` `/status` | Mode / thống kê |
+| `/config` `/settings` `/check` | Cấu hình hiện tại + kiểm tra quyền bot ở forum/channel |
 | `/recreate` | Tạo lại topic nếu bị xóa |
 | `/retrybroadcast <jobId>` | Gửi lại các item fail của broadcast |
 
@@ -145,3 +148,5 @@ npm run pm2:start
 | `npm run build` / `start` | Build & chạy `dist/` |
 | `npm test` | Vitest |
 | `npm run zalo:login` | QR login personal |
+| `npm run telegram:ids` | Lấy id group/channel/user (tắt bridge trước) |
+| `npm run telegram:chat -- <id\|@user>` | Tra cứu 1 chat theo id hoặc @username |

@@ -16,6 +16,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "zalo:login": "tsx src/zalo/personal/login.ts",
+    "telegram:ids": "tsx src/telegram/discover-ids.ts",
+    "telegram:chat": "tsx src/telegram/discover-ids.ts",
     "pm2:start": "pm2 start ecosystem.config.cjs",
     "pm2:restart": "pm2 restart tg-zalo",
     "pm2:logs": "pm2 logs tg-zalo",
