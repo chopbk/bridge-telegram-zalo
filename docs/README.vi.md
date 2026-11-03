@@ -11,6 +11,7 @@ Bridge **Telegram ↔ Zalo** cho hỗ trợ khách và broadcast kênh.
 - Spec: [../SPEC.md](../SPEC.md)
 - English (mặc định GitHub): [../README.md](../README.md)
 - Giấy phép: [MIT](../LICENSE)
+- Liên hệ: Telegram [@mrwin68](https://t.me/mrwin68)
 
 > **Cảnh báo:** Mode personal dùng automation Zalo không chính thức ([zca-js](https://github.com/RFS-ADRENO/zca-js)). Có rủi ro hạn chế/khóa nick. Nên dùng **nick phụ**. Bạn tự chịu trách nhiệm tuân thủ điều khoản Telegram/Zalo và pháp luật.
 
@@ -238,6 +239,10 @@ Giữ thông báo giấy phép [MIT](../LICENSE) trong bản sao. Ghi nguồn up
 - Mode bot dùng Bot API công khai của Zalo.
 
 ---
+
+## Liên hệ
+
+- Telegram: [@mrwin68](https://t.me/mrwin68)
 
 ## Miễn trừ trách nhiệm
 

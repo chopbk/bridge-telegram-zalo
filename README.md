@@ -11,6 +11,7 @@ Bridge **Telegram ↔ Zalo** for customer support and channel broadcasts.
 - Spec: [SPEC.md](./SPEC.md)
 - Tiếng Việt: [docs/README.vi.md](./docs/README.vi.md)
 - License: [MIT](./LICENSE)
+- Contact: Telegram [@mrwin68](https://t.me/mrwin68)
 
 > **Warning:** Personal mode uses unofficial Zalo automation ([zca-js](https://github.com/RFS-ADRENO/zca-js)). Accounts can be limited or banned. Prefer a **secondary** Zalo account. You are responsible for complying with Telegram, Zalo, and local law.
 
@@ -257,6 +258,10 @@ Please keep the [MIT](./LICENSE) license notice in copies and substantial portio
 - Official Zalo Bot mode uses Zalo’s public Bot API documentation and endpoints.
 
 ---
+
+## Contact
+
+- Telegram: [@mrwin68](https://t.me/mrwin68)
 
 ## Disclaimer
 
