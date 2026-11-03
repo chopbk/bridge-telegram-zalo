@@ -4,6 +4,7 @@ import logger from './config/logger.js';
 import { getDb } from './db/client.js';
 import { createZaloAdapter } from './zalo/factory.js';
 import { wireInbound } from './bridge/inbound.js';
+import { resumePendingBroadcasts } from './bridge/broadcast.js';
 import { createTelegramBot, startTelegramBot } from './telegram/bot.js';
 import { setNotifyApi } from './telegram/notify.js';
 
@@ -17,6 +18,11 @@ async function main(): Promise<void> {
 
   wireInbound(telegramBot.api, adapter);
   await adapter.start();
+
+  // Resume persisted broadcast jobs after restart
+  void resumePendingBroadcasts(adapter).catch((err) => {
+    logger.error({ err }, 'Failed to resume pending broadcasts');
+  });
 
   const app = express();
   app.use(express.json({ limit: '1mb' }));
@@ -41,7 +47,6 @@ async function main(): Promise<void> {
     });
   });
 
-  // Start Telegram polling (blocks)
   await startTelegramBot(telegramBot);
 }
 

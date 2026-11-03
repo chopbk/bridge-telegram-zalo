@@ -2,6 +2,11 @@ import type { Express, Request, Response } from 'express';
 import { getEnv } from '../../config/env.js';
 import logger from '../../config/logger.js';
 import { SendQueue } from '../../bridge/queue.js';
+import {
+  markInboundEventDone,
+  markInboundEventFailed,
+  storeInboundEvent,
+} from '../../db/inbound-events.js';
 import type { NormalizedInbound, ZaloAdapter, ZaloSendResult } from '../types.js';
 
 type InboundHandler = (msg: NormalizedInbound) => void | Promise<void>;
@@ -10,9 +15,8 @@ type InboundHandler = (msg: NormalizedInbound) => void | Promise<void>;
  * Official Zalo Bot API adapter.
  * Docs: https://docs.zaloplatforms.com/zalo-bot
  *
- * - Local/dev: long polling via getUpdates (default when NODE_ENV !== production)
- * - Production: HTTPS webhook
- * Polling and webhook are mutually exclusive on Zalo's side.
+ * - Local/dev: long polling via getUpdates
+ * - Production: HTTPS webhook (secret required; persist before 200)
  */
 export class ZaloBotAdapter implements ZaloAdapter {
   readonly mode = 'bot' as const;
@@ -24,7 +28,7 @@ export class ZaloBotAdapter implements ZaloAdapter {
 
   constructor() {
     const env = getEnv();
-    this.queue = new SendQueue(env.ZALO_MIN_SEND_INTERVAL_MS);
+    this.queue = new SendQueue(env.ZALO_MIN_SEND_INTERVAL_MS, env.ZALO_SEND_MAX_PER_MINUTE);
     this.apiBase = `https://bot-api.zaloplatforms.com/bot${env.ZALO_BOT_TOKEN}`;
   }
 
@@ -57,12 +61,47 @@ export class ZaloBotAdapter implements ZaloAdapter {
   mountWebhook(app: Express): void {
     const path = getEnv().ZALO_BOT_WEBHOOK_PATH;
     app.post(path, (req: Request, res: Response) => {
+      if (!this.verifyWebhook(req)) {
+        res.sendStatus(401);
+        return;
+      }
+
+      const msg = normalizeBotUpdate(req.body);
+      const rawId = extractRawUpdateId(req.body);
+      const eventId = msg?.messageId ?? (rawId ? `raw:${rawId}` : null);
+
+      if (!eventId) {
+        res.sendStatus(200);
+        return;
+      }
+
+      // Persist before ack so restart can recover
+      const stored = storeInboundEvent(this.mode, eventId, req.body);
       res.sendStatus(200);
-      void this.dispatchInbound(req.body).catch((err) => {
-        logger.error({ err }, 'Zalo bot webhook handler failed');
-      });
+      if (!stored) return;
+
+      void this.dispatchInbound(req.body, msg)
+        .then(() => markInboundEventDone(this.mode, eventId))
+        .catch((err) => {
+          markInboundEventFailed(this.mode, eventId);
+          logger.error({ err }, 'Zalo bot webhook handler failed');
+        });
     });
     logger.info({ path }, 'Zalo bot webhook mounted');
+  }
+
+  private verifyWebhook(req: Request): boolean {
+    const secret = getEnv().ZALO_BOT_WEBHOOK_SECRET;
+    if (!secret) return false;
+    const header =
+      req.get('X-Zalo-Bot-Api-Secret-Token') ||
+      req.get('x-zalo-bot-api-secret-token') ||
+      '';
+    if (header && header === secret) return true;
+    const auth = req.get('authorization') || '';
+    if (auth === `Bearer ${secret}` || auth === secret) return true;
+    logger.warn('Zalo bot webhook rejected — invalid secret');
+    return false;
   }
 
   private async deleteWebhook(): Promise<void> {
@@ -116,9 +155,16 @@ export class ZaloBotAdapter implements ZaloAdapter {
     }
   }
 
-  private async dispatchInbound(body: unknown): Promise<void> {
-    const msg = normalizeBotUpdate(body);
-    if (!msg || !this.handler) return;
+  private async dispatchInbound(body: unknown, preNormalized?: NormalizedInbound | null): Promise<void> {
+    const msg = preNormalized === undefined ? normalizeBotUpdate(body) : preNormalized;
+    if (!msg || !this.handler) {
+      if (!msg && body) {
+        logger.info({ bodyType: typeof body }, 'Unsupported Zalo bot update — skipped');
+      }
+      return;
+    }
+
+    // Dedup lives in bridge/inbound (claimProcessedMessage)
     await this.handler(msg);
   }
 
@@ -151,17 +197,23 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+function extractRawUpdateId(body: unknown): string | null {
+  if (!body || typeof body !== 'object') return null;
+  const raw = body as Record<string, unknown>;
+  if (raw.update_id != null) return String(raw.update_id);
+  if (raw.event_id != null) return String(raw.event_id);
+  return null;
+}
+
 export function normalizeBotUpdate(body: unknown): NormalizedInbound | null {
   if (!body || typeof body !== 'object') return null;
   const raw = body as Record<string, unknown>;
 
-  // Zalo Bot style (Telegram-like / getUpdates): message.chat.id + message.text
   const message = raw.message as Record<string, unknown> | undefined;
   if (message && typeof message === 'object') {
     const chat = message.chat as Record<string, unknown> | undefined;
-    const text = typeof message.text === 'string' ? message.text : null;
     const chatId = chat?.id;
-    if (text && (typeof chatId === 'string' || typeof chatId === 'number')) {
+    if (typeof chatId === 'string' || typeof chatId === 'number') {
       const from = message.from as Record<string, unknown> | undefined;
       const name =
         typeof from?.display_name === 'string'
@@ -169,16 +221,40 @@ export function normalizeBotUpdate(body: unknown): NormalizedInbound | null {
           : typeof from?.first_name === 'string'
             ? from.first_name
             : undefined;
+      const messageId = message.message_id != null ? String(message.message_id) : undefined;
+
+      if (typeof message.text === 'string' && message.text) {
+        return {
+          zaloUserId: String(chatId),
+          text: message.text,
+          displayName: name,
+          messageId,
+        };
+      }
+
+      // Non-text message types
+      const kind =
+        message.photo != null
+          ? 'photo'
+          : message.document != null
+            ? 'document'
+            : message.voice != null
+              ? 'voice'
+              : message.sticker != null
+                ? 'sticker'
+                : message.video != null
+                  ? 'video'
+                  : 'media';
       return {
         zaloUserId: String(chatId),
-        text,
+        text: '',
         displayName: name,
-        messageId: message.message_id != null ? String(message.message_id) : undefined,
+        messageId,
+        unsupportedKind: kind,
       };
     }
   }
 
-  // OA-style fallback: event_name user_send_text
   if (raw.event_name === 'user_send_text') {
     const sender = raw.sender as Record<string, unknown> | undefined;
     const msg = raw.message as Record<string, unknown> | undefined;

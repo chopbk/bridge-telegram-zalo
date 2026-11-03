@@ -15,7 +15,8 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
   private started = false;
 
   constructor() {
-    this.queue = new SendQueue(getEnv().ZALO_MIN_SEND_INTERVAL_MS);
+    const env = getEnv();
+    this.queue = new SendQueue(env.ZALO_MIN_SEND_INTERVAL_MS, env.ZALO_SEND_MAX_PER_MINUTE);
   }
 
   onInbound(handler: InboundHandler): void {
@@ -31,7 +32,14 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
     });
     api.listener.start();
     this.started = true;
-    logger.info({ mode: this.mode }, 'ZaloPersonalAdapter listener started');
+    logger.info(
+      {
+        mode: this.mode,
+        minIntervalMs: getEnv().ZALO_MIN_SEND_INTERVAL_MS,
+        maxPerMinute: getEnv().ZALO_SEND_MAX_PER_MINUTE,
+      },
+      'ZaloPersonalAdapter listener started',
+    );
   }
 
   async stop(): Promise<void> {
@@ -49,15 +57,33 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
   private async handleMessage(message: ZaloListenerMessage): Promise<void> {
     if (message.isSelf) return;
     if (message.type !== ThreadType.User) return;
-    const content = message.data.content;
-    if (typeof content !== 'string' || !content.trim()) return;
     if (!this.handler) return;
 
+    const content = message.data.content;
+    const displayName =
+      typeof message.data.dName === 'string' ? message.data.dName : undefined;
+    const messageId =
+      message.data.msgId != null ? String(message.data.msgId) : undefined;
+    const zaloUserId = String(message.threadId);
+
+    if (typeof content === 'string' && content.trim()) {
+      await this.handler({
+        zaloUserId,
+        text: content,
+        displayName,
+        messageId,
+      });
+      return;
+    }
+
+    // Non-text: still surface to Telegram
+    const kind = describeUnsupportedContent(content);
     await this.handler({
-      zaloUserId: String(message.threadId),
-      text: content,
-      displayName: typeof message.data.dName === 'string' ? message.data.dName : undefined,
-      messageId: message.data.msgId != null ? String(message.data.msgId) : undefined,
+      zaloUserId,
+      text: '',
+      displayName,
+      messageId,
+      unsupportedKind: kind,
     });
   }
 
@@ -79,4 +105,15 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
       }
     });
   }
+}
+
+function describeUnsupportedContent(content: unknown): string {
+  if (content == null) return 'empty';
+  if (typeof content === 'object') {
+    const obj = content as Record<string, unknown>;
+    if (obj.title || obj.href || obj.thumb) return 'link/attachment';
+    if ('action' in obj) return 'action';
+    return 'media/object';
+  }
+  return typeof content;
 }

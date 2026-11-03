@@ -2,9 +2,12 @@ export type ZaloMode = 'bot' | 'personal';
 
 export type NormalizedInbound = {
   zaloUserId: string;
+  /** Empty when unsupportedKind is set */
   text: string;
   displayName?: string;
   messageId?: string;
+  /** Non-text inbound (image, file, voice, …) */
+  unsupportedKind?: string;
 };
 
 export type ZaloSendResult = {
