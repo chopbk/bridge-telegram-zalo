@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "Telegram ↔ Zalo bridge (topic inbox + channel broadcast)",
+  "license": "MIT",
   "type": "module",
   "main": "dist/server.js",
   "engines": {

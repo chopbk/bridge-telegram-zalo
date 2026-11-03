@@ -1,153 +1,250 @@
 # tg-zalo (Tiếng Việt)
 
-Bridge **Telegram ↔ Zalo**: mỗi khách một forum topic, reply topic → Zalo, post kênh → broadcast.
+Bridge **Telegram ↔ Zalo** cho hỗ trợ khách và broadcast kênh.
+
+| Hướng | Việc xảy ra |
+|-------|-------------|
+| **A** | Zalo (1-1 hoặc group) → một **forum topic** Telegram / mỗi id đã map |
+| **B** | Admin reply trong topic → đúng user/group Zalo (text + ảnh) |
+| **C** | Post **channel** Telegram (text/ảnh) → fan-out tới danh sách Zalo đã duyệt |
 
 - Spec: [../SPEC.md](../SPEC.md)
-- Bản tiếng Anh (mặc định GitHub): [../README.md](../README.md)
+- English (mặc định GitHub): [../README.md](../README.md)
+- Giấy phép: [MIT](../LICENSE)
+
+> **Cảnh báo:** Mode personal dùng automation Zalo không chính thức ([zca-js](https://github.com/RFS-ADRENO/zca-js)). Có rủi ro hạn chế/khóa nick. Nên dùng **nick phụ**. Bạn tự chịu trách nhiệm tuân thủ điều khoản Telegram/Zalo và pháp luật.
+
+---
+
+## Tính năng
+
+- **2 mode Zalo** (chạy một lúc một): `personal` (zca-js, MVP khuyến nghị) hoặc `bot` API chính thức
+- **Hộp thư forum**: mỗi topic gắn 1 user **hoặc group** (`thread_kind`)
+- **Đăng ký**: khách `đăng ký` → `pending` → admin `/approve` / `/reject`
+- **CRUD allowlist**: `/useradd`, `/useredit`, `/userdel`, `/users`, `/search`
+- **Group**: map theo **id group**, không theo thành viên gửi; `/useradd <id> group`
+- **Ảnh 2 chiều**: topic ↔ Zalo (1 ảnh / album); ảnh channel cũng broadcast
+- **Nhiều admin / nhiều channel**: `TELEGRAM_ADMIN_IDS`, `TELEGRAM_CHANNEL_ID` (phẩy)
+- **Job broadcast** SQLite + retry + báo cáo admin; `/retrybroadcast`
+- **Rate limit** gửi personal
+- **Helper**: `telegram:ids` lấy id chat; `/config` kiểm tra quyền bot
+
+---
 
 ## Yêu cầu
 
-- Node.js ≥ **22.5** (dùng built-in `node:sqlite`; khuyến nghị 22/24 LTS)
-- Telegram bot + **supergroup bật Topics** + **channel** (bot là admin)
-- **`TELEGRAM_ADMIN_IDS` bắt buộc** — nhiều admin: `111,222`
-- **`TELEGRAM_CHANNEL_ID`** — nhiều channel: `-1001,-1002`
-- Mode `personal` (**MVP khuyến nghị**): nick Zalo phụ + `npm run zalo:login`
-- Mode `bot`: Zalo Bot token; production webhook cần secret
+- **Node.js ≥ 22.5** (`node:sqlite`; khuyến nghị 22/24 LTS)
+- Bot Telegram (BotFather)
+- **Supergroup bật Topics**; bot **admin** (có Manage Topics)
+- Một hoặc nhiều **channel**; bot admin
+- Mạng vào được `api.telegram.org` (nhiều ISP VN timeout — cân nhắc VPN/VPS)
+- Mode personal: nick Zalo phụ + đăng nhập QR
+- Mode bot: token Zalo Bot (+ secret webhook production)
+
+---
 
 ## Cài đặt nhanh
 
 ```bash
+git clone https://github.com/<your-org>/tg-zalo.git
+cd tg-zalo
 cp .env.example .env
-# điền TELEGRAM_BOT_TOKEN trước, rồi lấy id chat:
 npm install
-npm run telegram:ids    # tắt bridge trước; gõ /id trong group / chat riêng / channel
-# điền TELEGRAM_FORUM_GROUP_ID, TELEGRAM_CHANNEL_ID, TELEGRAM_ADMIN_IDS
-npm run zalo:login      # nếu personal
+
+# 1) Điền TELEGRAM_BOT_TOKEN
+# 2) Lấy id (tắt bridge nếu đang chạy — cùng token không poll 2 lần)
+npm run telegram:ids
+# Chat riêng với bot → user id (ADMIN_IDS)
+# Thêm bot vào forum / channel, gõ /id → FORUM / CHANNEL ids
+
+# 3) Điền đủ .env rồi:
+npm run zalo:login   # chỉ personal — quét QR
 npm run dev
 ```
 
-### Mode Zalo cá nhân (MVP trước)
+Kiểm tra: chat riêng với bot, admin gõ `/config`.
+
+---
+
+## Biến môi trường
+
+Xem [`.env.example`](../.env.example).
+
+| Biến | Ý nghĩa |
+|------|---------|
+| `ZALO_MODE` | `personal` \| `bot` |
+| `TELEGRAM_BOT_TOKEN` | Token bot |
+| `TELEGRAM_FORUM_GROUP_ID` | Id forum (thường `-100…`) |
+| `TELEGRAM_CHANNEL_ID` | Một hoặc nhiều channel, phẩy |
+| `TELEGRAM_ADMIN_IDS` | Một hoặc nhiều **user id** admin, phẩy (**bắt buộc**) |
+| `ZALO_SESSION_PATH` | File session personal (đã gitignore) |
+| `ZALO_MIN_SEND_INTERVAL_MS` | Delay giữa các lần gửi (mặc định `1500`) |
+| `ZALO_SEND_MAX_PER_MINUTE` | Trần gửi/phút (mặc định `20`) |
+| `ZALO_BOT_TOKEN` | Bắt buộc nếu `bot` |
+| `ZALO_BOT_TRANSPORT` | `polling` \| `webhook` |
+| `ZALO_BOT_WEBHOOK_SECRET` | Bắt buộc webhook |
+| `DATABASE_PATH` | SQLite |
+| `JOB_MAX_RETRIES` | Số lần retry broadcast item |
+| `LIST_PAGE_SIZE` | Phân trang lệnh list |
 
 ```env
 ZALO_MODE=personal
+TELEGRAM_BOT_TOKEN=123456:ABC…
+TELEGRAM_FORUM_GROUP_ID=-1001234567890
+TELEGRAM_CHANNEL_ID=-1001111111111,-1002222222222
+TELEGRAM_ADMIN_IDS=111111111,222222222
 ZALO_SESSION_PATH=./data/zalo-session.json
-ZALO_MIN_SEND_INTERVAL_MS=1500
-ZALO_SEND_MAX_PER_MINUTE=20
-TELEGRAM_ADMIN_IDS=123456789
 ```
 
+---
+
+## Checklist Telegram
+
+1. Tạo bot [@BotFather](https://t.me/BotFather).
+2. Tạo **supergroup**, bật **Topics**, thêm bot admin (Manage Topics, gửi tin…).
+3. Tạo channel, thêm bot admin.
+4. `npm run telegram:ids` → điền `.env`.
+5. Chạy bridge; `/config` — forum/channel phải thấy bot là administrator.
+
+---
+
+## Mode Zalo
+
+### Personal (MVP khuyến nghị)
+
 ```bash
-npm run zalo:login   # quét QR → lưu session
+npm run zalo:login
 npm run dev
 ```
 
-Dùng **nick phụ**. `zca-js` không chính thức — có rủi ro hạn chế/khóa tài khoản. Rate limit + delay giúp giảm rủi ro khi broadcast.
+- Dùng [zca-js](https://github.com/RFS-ADRENO/zca-js) (không chính thức).
+- Listener phải chạy để nhận tin + gửi ảnh ổn định.
+- Chỉ **một** phiên web / nick — đừng mở Zalo Web song song.
 
-### Mode Zalo Bot
+### Bot API chính thức
 
 ```env
 ZALO_MODE=bot
-ZALO_BOT_TOKEN=...
-PORT=3080
+ZALO_BOT_TOKEN=…
 ```
 
-**Local / dev (mặc định):** long polling `getUpdates`.
+Khách phải nhắn bot Zalo trước mới nhận được tin. Gửi ảnh mode bot chưa đầy đủ — dùng personal nếu cần bridge ảnh.
 
-**Production:** webhook + HTTPS + `ZALO_BOT_WEBHOOK_SECRET` (header `X-Zalo-Bot-Api-Secret-Token`).
+---
 
-Khách **phải nhắn bot Zalo trước** mới nhận/gửi được.
+## Vòng đời khách & group
 
-## Đăng ký khách
+### User 1-1
 
-Topic **không** tự tạo khi khách nhắn lung tung. Chỉ tạo khi:
+1. Khách nhắn: `đăng ký` / `/register` / `/start`
+2. Tạo topic `pending`
+3. Admin `/approve` hoặc `/reject`
+4. Chỉ **approved**, không muted/blocked → nhận broadcast kênh
+5. Hủy: `hủy đăng ký` / `/stop`
+6. Người lạ 1-1: gợi ý đăng ký trên Zalo, **không** tự tạo topic
 
-1. Khách nhắn Zalo: `đăng ký` / `dang ky` / `/register` (hoặc `/start`) → topic **pending**
-2. Hoặc admin `/useradd <zalo_id>` → topic **approved**
+### Group
 
-Sau đó:
-3. Admin trong topic: `/approve` hoặc `/reject`
-4. Chỉ khách **approved**, không muted, không blocked mới nhận broadcast
-5. Khách hủy: `hủy đăng ký` / `/stop` → `unsubscribed`
+- Map theo **id group**
+- Thêm: `/useradd <group_id> group [tên]`
+- Topic hiển thị: `Tên người gửi: nội dung`
+- **Không** auto-reply đăng ký/hủy trong group
+- Group chưa add → bỏ qua im lặng
 
-Tin thường từ người chưa có trong danh sách → bot Zalo gợi ý đăng ký, **không** mở topic.
+`/mute` chỉ tắt broadcast, khác hủy đăng ký của khách.
 
-**Mute** (`/mute`) chỉ tạm tắt broadcast — khác hủy đăng ký của khách.
+---
 
-## Lệnh admin (Telegram)
+## Luồng tin
 
-Chỉ user thuộc `TELEGRAM_ADMIN_IDS`, trong **forum group** hoặc **chat riêng với bot**. Gõ `/help` để xem nhanh.
+| Luồng | Chi tiết |
+|------|----------|
+| **A** | Zalo → topic: text + ảnh; media khác → `[Chưa hỗ trợ]`; group theo group id |
+| **B** | Topic → Zalo: admin; text / 1 ảnh / album; khách phải receivable |
+| **C** | Channel text/ảnh → job fan-out + báo cáo admin; ảnh tải **1 lần** rồi gửi lần lượt |
 
-Lệnh viết liền (không dấu `_`) để tránh Markdown Telegram làm hỏng tin.
+---
 
-### Danh sách & CRUD người dùng Zalo
+## Lệnh admin
+
+Chỉ `TELEGRAM_ADMIN_IDS`, trong **forum** hoặc **chat riêng với bot**. Lệnh viết liền (không `_`). `/help` để xem nhanh.
+
+### User & group
 
 | Lệnh | Ý nghĩa |
 |------|---------|
-| `/users` | Khách đã ghi nhận trong bridge DB (có `zalo=…`) |
-| `/users allowed` | Chỉ danh sách cho phép (approved) |
-| `/users pending` | Chờ duyệt |
-| `/users ids` | Chỉ in các Zalo ID (dễ copy) |
-| `/users 2` | Trang 2 |
-| `/zalofriends` | Bạn bè trên nick Zalo (personal) — lấy id rồi `/useradd` |
-| `/zalochats` | Chat gần đây (user + group); lọc `/zalochats group` |
-| `/user <zalo_id>` | Chi tiết 1 khách (hoặc `/user` trong topic) |
-| `/useradd <zalo_id> [group\|user] [tên]` | Thêm allowlist; group gửi bằng ThreadType.Group |
-| `/useredit <zalo_id> name=Tên kind=group status=approved` | Sửa (kind=user\|group) |
-| `/userdel <zalo_id>` | Xoá khỏi DB (+ xoá topic nếu được) |
-| `/search <query>` | Tìm theo tên / zalo id |
-| `/list [page] [status]` | Alias list cũ |
+| `/users` `[page]` `[all\|allowed\|pending\|ids]` | Khách trong DB |
+| `/user` `[zalo_id]` | Chi tiết |
+| `/zalofriends` | Bạn bè nick Zalo (personal) |
+| `/zalochats` `[user\|group]` | Chat gần đây; `group` probe tin cuối |
+| `/useradd` `<id>` `[group\|user]` `[tên]` | Thêm + tạo topic |
+| `/useredit` … | Sửa field |
+| `/userdel` `<id>` | Xoá |
+| `/search` `<query>` | Tìm |
 
 ### Duyệt / chặn
 
 | Lệnh | Ý nghĩa |
 |------|---------|
-| `/approve` `/reject` `[zalo_id]` | Duyệt / từ chối (trong topic **hoặc** kèm id) |
-| `/block` `/unblock` `[zalo_id]` | Chặn cứng |
-| `/mute` `/unmute` `[zalo_id]` | Tạm tắt/bật broadcast |
+| `/approve` `/reject` `[zalo_id]` | Duyệt / từ chối |
+| `/block` `/unblock` | Chặn cứng |
+| `/mute` `/unmute` | Tắt/bật broadcast |
 
 ### Hệ thống
 
 | Lệnh | Ý nghĩa |
 |------|---------|
 | `/mode` `/status` | Mode / thống kê |
-| `/config` `/settings` `/check` | Cấu hình hiện tại + kiểm tra quyền bot ở forum/channel |
-| `/recreate` | Tạo lại topic nếu bị xóa |
-| `/retrybroadcast <jobId>` | Gửi lại các item fail của broadcast |
+| `/config` | Cấu hình + check quyền live |
+| `/recreate` | Tạo lại topic |
+| `/retrybroadcast` `<jobId>` | Retry broadcast |
 
-Reply text trong topic khách → Zalo **chỉ khi** người gửi là admin và khách `approved`.
-
-## Luồng tin
-
-| Luồng | Hành vi |
-|------|---------|
-| A | Khách → Zalo → topic; đăng ký/hủy; media chưa hỗ trợ → báo topic |
-| B | Admin reply trong topic → Zalo khách (nếu approved) |
-| C | Post text/ảnh kênh → job SQLite fan-out + báo cáo admin (ok/fail) |
-
-MVP chỉ **gửi** text; nhận media thì thông báo trên Telegram.
-
-## Độ tin cậy
-
-- Dedup inbound theo `(provider, message_id)`
-- Broadcast lưu job SQLite, retry có giới hạn, resume sau restart
-- Mapping theo `(provider, zalo_user_id)` — đổi mode không lẫn khách
-
-## Production
-
-```bash
-npm run build
-npm run pm2:start
-```
-
-`ecosystem.config.cjs`: **1 instance, fork** (bắt buộc với personal session).
+---
 
 ## Scripts
 
 | Script | Mô tả |
 |--------|--------|
 | `npm run dev` | Dev watch |
-| `npm run build` / `start` | Build & chạy `dist/` |
-| `npm test` | Vitest |
-| `npm run zalo:login` | QR login personal |
-| `npm run telegram:ids` | Lấy id group/channel/user (tắt bridge trước) |
-| `npm run telegram:chat -- <id\|@user>` | Tra cứu 1 chat theo id hoặc @username |
+| `npm run build` / `start` | Build & chạy |
+| `npm test` / `typecheck` | Test / typecheck |
+| `npm run zalo:login` | QR personal |
+| `npm run telegram:ids` | Lấy id (**tắt bridge trước**) |
+| `npm run telegram:chat -- <id\|@name>` | Tra 1 chat |
+| `npm run pm2:*` | PM2 |
+
+Production: **1 instance, fork** — `ecosystem.config.cjs`.
+
+```bash
+npm run build && npm run pm2:start
+```
+
+---
+
+## Fork & đóng góp
+
+1. **Fork** repo trên GitHub.
+2. Nhánh mới: `git checkout -b feature/my-change`
+3. Không commit secret (`.env`, `data/zalo-session.json`, `*.db`).
+4. Chạy `npm test` và `npm run typecheck`.
+5. Mở Pull Request mô tả thay đổi + cách test.
+
+Giữ thông báo giấy phép [MIT](../LICENSE) trong bản sao. Ghi nguồn upstream trong README của bạn là được khuyến khích.
+
+### Bên thứ ba / thương hiệu
+
+- **Telegram** và **Zalo** thuộc chủ sở hữu tương ứng. Dự án **không** liên kết / được bảo trợ bởi Telegram hay Zalo.
+- Mode personal phụ thuộc **zca-js** — client không chính thức, tự chịu rủi ro.
+- Mode bot dùng Bot API công khai của Zalo.
+
+---
+
+## Miễn trừ trách nhiệm
+
+Phần mềm cung cấp “NGUYÊN TRẠNG”, không bảo đảm. Tác giả không chịu trách nhiệm khóa tài khoản, mất tin, hoặc sử dụng sai mục đích. Người vận hành phải xin consent người dùng cuối khi luật yêu cầu.
+
+---
+
+## Giấy phép
+
+[MIT](../LICENSE) © 2026 tg-zalo contributors
