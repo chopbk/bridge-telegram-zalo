@@ -147,7 +147,7 @@ Customers must message the Zalo bot once before they can receive messages. Photo
 3. Admin: `/approve` or `/reject` (in topic or with `zalo_id`)
 4. Only **approved**, not muted, not blocked → receive channel broadcasts
 5. Unsubscribe: `hủy đăng ký` / `/stop` → `unsubscribed`
-6. Unknown 1-1 chatters get a short register hint on Zalo; **no** auto topic
+6. Unknown 1-1 chatters are ignored (no auto-reply, no topic) until they `/register` or admin `/useradd`
 
 ### Groups
 

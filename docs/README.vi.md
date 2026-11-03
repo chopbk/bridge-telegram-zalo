@@ -142,7 +142,7 @@ Khách phải nhắn bot Zalo trước mới nhận được tin. Gửi ảnh mo
 3. Admin `/approve` hoặc `/reject`
 4. Chỉ **approved**, không muted/blocked → nhận broadcast kênh
 5. Hủy: `hủy đăng ký` / `/stop`
-6. Người lạ 1-1: gợi ý đăng ký trên Zalo, **không** tự tạo topic
+6. Người lạ 1-1: bỏ qua im lặng (không auto-reply, không tạo topic) — trừ khi họ `/register` hoặc admin `/useradd`
 
 ### Group
 
