@@ -14,9 +14,16 @@ import {
   type BroadcastItemPayload,
 } from '../db/jobs.js';
 import { notifyAdmins } from '../telegram/notify.js';
-import type { ZaloAdapter } from '../zalo/types.js';
+import type { ZaloAdapter, ZaloImageAttachment } from '../zalo/types.js';
 import { bufferToZaloImage, downloadToBuffer, telegramFileUrl } from './media.js';
 import { broadcastTargets } from './mapper.js';
+
+/** Cache ảnh đã tải trong một lần drain (tránh getFile N lần cho N khách). */
+const photoCache = new Map<string, ZaloImageAttachment[]>();
+
+function photoCacheKey(fileIds: string[]): string {
+  return fileIds.join('|');
+}
 
 export type BroadcastResult = {
   ok: number;
@@ -40,7 +47,7 @@ export async function broadcastChannelText(
   });
 }
 
-/** Broadcast ảnh channel (file_id Telegram — tải lại lúc gửi từng khách). */
+/** Broadcast ảnh channel (file_id Telegram — tải 1 lần rồi gửi từng khách). */
 export async function broadcastChannelPhotos(
   adapter: ZaloAdapter,
   imageFileIds: string[],
@@ -67,6 +74,26 @@ async function enqueueAndDrainBroadcast(
   },
 ): Promise<BroadcastResult> {
   const targets = broadcastTargets(adapter.mode);
+
+  // Tải ảnh trước khi tạo job — fail sớm nếu Telegram timeout / chặn mạng
+  if (opts.imageFileIds?.length) {
+    try {
+      const images = await downloadTelegramFileIds(opts.imageFileIds);
+      photoCache.set(photoCacheKey(opts.imageFileIds), images);
+      logger.info(
+        { count: images.length, bytes: images.reduce((s, i) => s + i.data.length, 0) },
+        'Channel photos downloaded once for broadcast',
+      );
+    } catch (err) {
+      logger.error({ err }, 'Failed to download channel photos from Telegram');
+      throw new Error(
+        `Không tải được ảnh từ Telegram (timeout/mạng tới api.telegram.org). Thử lại hoặc kiểm tra mạng/VPN. Chi tiết: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+
   const { parentId } = createBroadcastJob({
     text: opts.text,
     provider: adapter.mode,
@@ -88,13 +115,17 @@ async function enqueueAndDrainBroadcast(
     'Broadcasting channel post to Zalo customers',
   );
 
-  const result = await drainBroadcastItems(adapter, parentId);
-
-  if (opts.report !== false) {
-    await reportBroadcast(result);
+  try {
+    const result = await drainBroadcastItems(adapter, parentId);
+    if (opts.report !== false) {
+      await reportBroadcast(result);
+    }
+    return result;
+  } finally {
+    if (opts.imageFileIds?.length) {
+      photoCache.delete(photoCacheKey(opts.imageFileIds));
+    }
   }
-
-  return result;
 }
 
 export async function retryBroadcast(
@@ -158,7 +189,12 @@ export async function drainBroadcastItems(
         if (!adapter.sendImages) {
           throw new Error('Adapter không hỗ trợ gửi ảnh');
         }
-        const images = await downloadTelegramFileIds(payload.imageFileIds);
+        const key = photoCacheKey(payload.imageFileIds);
+        let images = photoCache.get(key);
+        if (!images) {
+          images = await downloadTelegramFileIds(payload.imageFileIds);
+          photoCache.set(key, images);
+        }
         await adapter.sendImages(payload.zaloUserId, images, {
           threadKind: payload.threadKind ?? 'user',
           caption: payload.text || undefined,
@@ -219,24 +255,22 @@ async function reportBroadcast(result: BroadcastResult): Promise<void> {
   await notifyAdmins(lines.join('\n'));
 }
 
-async function downloadTelegramFileIds(fileIds: string[]) {
+async function downloadTelegramFileIds(fileIds: string[]): Promise<ZaloImageAttachment[]> {
   const env = getEnv();
-  // Lazy import Api via getFile through raw Telegram HTTP to avoid needing Bot ctx here
-  const out = [];
+  const out: ZaloImageAttachment[] = [];
   for (let i = 0; i < fileIds.length; i++) {
-    const metaRes = await fetch(
-      `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/getFile?file_id=${encodeURIComponent(fileIds[i]!)}`,
-    );
-    const meta = (await metaRes.json()) as {
+    const metaUrl = `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/getFile?file_id=${encodeURIComponent(fileIds[i]!)}`;
+    const metaBuf = await downloadToBuffer(metaUrl, { timeoutMs: 45_000, retries: 3 });
+    const meta = JSON.parse(metaBuf.toString('utf8')) as {
       ok?: boolean;
       result?: { file_path?: string };
       description?: string;
     };
     if (!meta.ok || !meta.result?.file_path) {
-      throw new Error(`getFile failed: ${meta.description ?? metaRes.status}`);
+      throw new Error(`getFile failed: ${meta.description ?? 'unknown'}`);
     }
     const url = await telegramFileUrl(env.TELEGRAM_BOT_TOKEN, meta.result.file_path);
-    const buf = await downloadToBuffer(url);
+    const buf = await downloadToBuffer(url, { timeoutMs: 60_000, retries: 3 });
     const ext = meta.result.file_path.includes('.')
       ? meta.result.file_path.split('.').pop() || 'jpg'
       : 'jpg';

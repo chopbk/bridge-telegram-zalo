@@ -2,33 +2,79 @@ import { mkdir, writeFile, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
+import dns from 'node:dns';
 import { imageSize } from 'image-size';
 import logger from '../config/logger.js';
 import type { ZaloImageAttachment } from '../zalo/types.js';
 import { getSessionDownloadHeaders } from '../zalo/personal/session.js';
 
+// Telegram hay timeout trên IPv6 ở một số mạng VN — ưu tiên IPv4
+try {
+  dns.setDefaultResultOrder('ipv4first');
+} catch {
+  // ignore older node
+}
+
+export type DownloadOpts = {
+  headers?: Record<string, string>;
+  timeoutMs?: number;
+  retries?: number;
+};
+
 export async function downloadToBuffer(
   url: string,
-  headers?: Record<string, string>,
+  headersOrOpts?: Record<string, string> | DownloadOpts,
 ): Promise<Buffer> {
-  const res = await fetch(url, {
-    headers: {
-      'User-Agent':
-        headers?.['User-Agent'] ??
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0',
-      ...headers,
-    },
-    redirect: 'follow',
-  });
-  if (!res.ok) {
-    throw new Error(`Download failed ${res.status}: ${url.slice(0, 120)}`);
+  const opts: DownloadOpts =
+    headersOrOpts && ('headers' in headersOrOpts || 'timeoutMs' in headersOrOpts || 'retries' in headersOrOpts)
+      ? (headersOrOpts as DownloadOpts)
+      : { headers: headersOrOpts as Record<string, string> | undefined };
+
+  const headers = opts.headers;
+  const timeoutMs = opts.timeoutMs ?? 45_000;
+  const retries = Math.max(1, opts.retries ?? 3);
+  let lastErr: unknown;
+
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, {
+        headers: {
+          'User-Agent':
+            headers?.['User-Agent'] ??
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0',
+          ...headers,
+        },
+        redirect: 'follow',
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        throw new Error(`Download failed ${res.status}: ${url.slice(0, 120)}`);
+      }
+      const ab = await res.arrayBuffer();
+      const buf = Buffer.from(ab);
+      if (buf.length === 0) {
+        throw new Error(`Download empty body: ${url.slice(0, 120)}`);
+      }
+      return buf;
+    } catch (err) {
+      lastErr = err;
+      logger.warn(
+        { err, attempt, retries, url: url.slice(0, 80) },
+        'downloadToBuffer attempt failed',
+      );
+      if (attempt < retries) {
+        await new Promise((r) => setTimeout(r, 500 * attempt));
+      }
+    } finally {
+      clearTimeout(timer);
+    }
   }
-  const ab = await res.arrayBuffer();
-  const buf = Buffer.from(ab);
-  if (buf.length === 0) {
-    throw new Error(`Download empty body: ${url.slice(0, 120)}`);
-  }
-  return buf;
+
+  throw lastErr instanceof Error
+    ? lastErr
+    : new Error(`Download failed after ${retries} attempts`);
 }
 
 /** Tải ảnh Zalo CDN (kèm cookie session nếu có). */
