@@ -22,6 +22,8 @@ export type BroadcastPayload = {
   text: string;
   provider: string;
   channelMessageId?: number;
+  /** Telegram file_id ảnh để broadcast (tải lại lúc gửi) */
+  imageFileIds?: string[];
 };
 
 export type BroadcastItemPayload = {
@@ -30,6 +32,7 @@ export type BroadcastItemPayload = {
   zaloUserId: string;
   displayName?: string | null;
   threadKind?: 'user' | 'group';
+  imageFileIds?: string[];
 };
 
 export type Job = {
@@ -66,6 +69,7 @@ export function createBroadcastJob(input: {
   text: string;
   provider: string;
   channelMessageId?: number;
+  imageFileIds?: string[];
   targets: Array<{
     zaloUserId: string;
     displayName?: string | null;
@@ -80,6 +84,7 @@ export function createBroadcastJob(input: {
     text: input.text,
     provider: input.provider,
     channelMessageId: input.channelMessageId,
+    imageFileIds: input.imageFileIds,
   };
 
   db.exec('BEGIN');
@@ -110,6 +115,7 @@ export function createBroadcastJob(input: {
         zaloUserId: t.zaloUserId,
         displayName: t.displayName ?? null,
         threadKind: t.threadKind ?? 'user',
+        imageFileIds: input.imageFileIds,
       };
       const r = insertItem.run(
         parentId,

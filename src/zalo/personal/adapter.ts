@@ -73,15 +73,24 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
 
     const threadKind: ZaloThreadKind =
       message.type === ThreadType.Group ? 'group' : 'user';
+    // GroupMessage.threadId = idTo = group id; UserMessage.threadId = peer user id
     const zaloUserId = String(message.threadId);
-    const displayName =
+    const senderName =
       typeof message.data.dName === 'string' ? message.data.dName : undefined;
+    const senderId =
+      message.data.uidFrom != null ? String(message.data.uidFrom) : undefined;
     const atMs =
       normalizeZaloTs(
         message.data.ts != null ? Number(message.data.ts) : undefined,
       ) ?? Date.now();
-    // Ghi activity cả tin tự gửi — phản ánh chat gần đây trên nick
-    touchThreadActivity(this.mode, zaloUserId, threadKind, atMs, displayName);
+    // Activity theo thread (group id / user id) — không gắn tên người gửi vào group
+    touchThreadActivity(
+      this.mode,
+      zaloUserId,
+      threadKind,
+      atMs,
+      threadKind === 'user' ? senderName : undefined,
+    );
 
     if (message.isSelf) return;
     if (!this.handler) return;
@@ -92,23 +101,26 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
     const msgType =
       typeof message.data.msgType === 'string' ? message.data.msgType : undefined;
 
+    const base = {
+      zaloUserId,
+      threadKind,
+      senderId: threadKind === 'group' ? senderId : undefined,
+      senderName: threadKind === 'group' ? senderName : undefined,
+      // 1-1: tên user; group: giữ tên group đã lưu (inbound không ghi đè bằng dName)
+      displayName: threadKind === 'user' ? senderName : undefined,
+      messageId,
+    };
+
     if (typeof content === 'string' && content.trim()) {
-      await this.handler({
-        zaloUserId,
-        text: content,
-        displayName,
-        messageId,
-      });
+      await this.handler({ ...base, text: content });
       return;
     }
 
     const images = extractInboundImages(content, msgType);
     if (images && images.length > 0) {
       await this.handler({
-        zaloUserId,
+        ...base,
         text: captionFromPhotoContent(content),
-        displayName,
-        messageId,
         images,
       });
       return;
@@ -117,10 +129,8 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
     // Non-text: still surface to Telegram
     const kind = describeUnsupportedContent(content, msgType);
     await this.handler({
-      zaloUserId,
+      ...base,
       text: '',
-      displayName,
-      messageId,
       unsupportedKind: kind,
     });
   }

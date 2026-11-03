@@ -18,7 +18,11 @@ import {
 } from '../bridge/mapper.js';
 import { forwardTopicImagesToZalo, forwardTopicToZalo } from '../bridge/outbound.js';
 import { bufferToZaloImage, downloadToBuffer, telegramFileUrl } from '../bridge/media.js';
-import { broadcastChannelText, retryBroadcast } from '../bridge/broadcast.js';
+import {
+  broadcastChannelPhotos,
+  broadcastChannelText,
+  retryBroadcast,
+} from '../bridge/broadcast.js';
 import {
   countByStatus,
   formatCustomerDetail,
@@ -27,6 +31,7 @@ import {
 import type { SubscriptionStatus } from '../db/client.js';
 import type { ZaloAdapter, ZaloImageAttachment } from '../zalo/types.js';
 import { buildConfigReport } from './config-report.js';
+import { notifyAdmins } from './notify.js';
 
 /** Gom album Telegram (media_group_id) trước khi gửi Zalo */
 type PendingAlbum = {
@@ -36,6 +41,16 @@ type PendingAlbum = {
   timer?: ReturnType<typeof setTimeout>;
 };
 const pendingAlbums = new Map<string, PendingAlbum>();
+
+/** Album ảnh trên channel → broadcast */
+type PendingChannelAlbum = {
+  channelId: number;
+  caption?: string;
+  fileIds: string[];
+  messageId?: number;
+  timer?: ReturnType<typeof setTimeout>;
+};
+const pendingChannelAlbums = new Map<string, PendingChannelAlbum>();
 const ALBUM_FLUSH_MS = 900;
 
 const STATUSES = new Set<SubscriptionStatus>([
@@ -823,6 +838,54 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
     }
   });
 
+  bot.on('channel_post:photo', async (ctx) => {
+    const post = ctx.channelPost;
+    if (!post || !('photo' in post) || !post.photo?.length) return;
+    if (!env.telegramChannelIds.includes(post.chat.id)) return;
+
+    const largest = post.photo[post.photo.length - 1]!;
+    const caption = typeof post.caption === 'string' ? post.caption : undefined;
+    const groupId = post.media_group_id;
+
+    if (!groupId) {
+      try {
+        logger.info(
+          { channelId: post.chat.id, fileId: largest.file_id },
+          'Broadcasting channel photo → Zalo',
+        );
+        const result = await broadcastChannelPhotos(adapter, [largest.file_id], {
+          caption,
+          channelMessageId: post.message_id,
+        });
+        logger.info({ result, channelId: post.chat.id }, 'Channel photo broadcast done');
+      } catch (err) {
+        logger.error({ err, channelId: post.chat.id }, 'Channel photo broadcast failed');
+        await notifyAdmins(
+          `Broadcast ảnh channel thất bại: ${err instanceof Error ? err.message : String(err)}`,
+        ).catch(() => undefined);
+      }
+      return;
+    }
+
+    const key = `${post.chat.id}:${groupId}`;
+    let pending = pendingChannelAlbums.get(key);
+    if (!pending) {
+      pending = {
+        channelId: post.chat.id,
+        caption,
+        fileIds: [],
+        messageId: post.message_id,
+      };
+      pendingChannelAlbums.set(key, pending);
+    }
+    if (caption && !pending.caption) pending.caption = caption;
+    pending.fileIds.push(largest.file_id);
+    if (pending.timer) clearTimeout(pending.timer);
+    pending.timer = setTimeout(() => {
+      void flushChannelAlbum(key, adapter);
+    }, ALBUM_FLUSH_MS);
+  });
+
   bot.catch((err) => {
     logger.error({ err }, 'Telegram bot error');
   });
@@ -883,6 +946,28 @@ async function flushAlbum(
     logger.error({ err, topicId: pending.topicId, key }, 'Album photo→Zalo failed');
     const detail = err instanceof Error ? err.message : 'Gửi album ảnh Zalo thất bại.';
     await ctx.reply(detail).catch(() => undefined);
+  }
+}
+
+async function flushChannelAlbum(key: string, adapter: ZaloAdapter): Promise<void> {
+  const pending = pendingChannelAlbums.get(key);
+  if (!pending) return;
+  pendingChannelAlbums.delete(key);
+
+  try {
+    const result = await broadcastChannelPhotos(adapter, pending.fileIds, {
+      caption: pending.caption,
+      channelMessageId: pending.messageId,
+    });
+    logger.info(
+      { result, channelId: pending.channelId, count: pending.fileIds.length },
+      'Channel album broadcast done',
+    );
+  } catch (err) {
+    logger.error({ err, channelId: pending.channelId, key }, 'Channel album broadcast failed');
+    await notifyAdmins(
+      `Broadcast album channel thất bại: ${err instanceof Error ? err.message : String(err)}`,
+    ).catch(() => undefined);
   }
 }
 

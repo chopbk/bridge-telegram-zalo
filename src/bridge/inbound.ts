@@ -15,11 +15,9 @@ import { isRegisterIntent, isUnsubscribeIntent } from './registration.js';
 /**
  * Luồng A: Zalo → Telegram topic
  *
- * Topic chỉ được tạo khi:
- * - Khách nhắn /register hoặc "đăng ký"
- * - Admin /useradd (không đi qua đây)
- *
- * Tin thường từ người chưa có topic → không tạo topic, chỉ gợi ý đăng ký trên Zalo.
+ * - 1-1: map theo user id
+ * - Group: map theo **group id** (không theo người gửi trong group)
+ * Topic chỉ tạo khi register (1-1) hoặc admin /useradd.
  */
 export function wireInbound(api: Api, adapter: ZaloAdapter): void {
   adapter.onInbound(async (msg) => {
@@ -29,6 +27,14 @@ export function wireInbound(api: Api, adapter: ZaloAdapter): void {
       logger.error({ err, zaloUserId: msg.zaloUserId }, 'Inbound Zalo→Tele failed');
     }
   });
+}
+
+function formatInboundBody(msg: NormalizedInbound, statusPrefix: string, body: string): string {
+  const sender =
+    msg.threadKind === 'group' && (msg.senderName || msg.senderId)
+      ? `${msg.senderName || msg.senderId}: `
+      : '';
+  return `${statusPrefix}${sender}${body}`;
 }
 
 async function handleInbound(
@@ -47,11 +53,18 @@ async function handleInbound(
     }
   }
 
+  const isGroup = msg.threadKind === 'group';
   const existing = findByZaloUserId(msg.zaloUserId, adapter.mode);
   const text = (msg.text ?? '').trim();
 
-  // --- Đăng ký: mới được tạo topic ---
-  if (!msg.unsupportedKind && !msg.images?.length && text && isRegisterIntent(text)) {
+  // --- Đăng ký: chỉ áp dụng 1-1 (không auto-register / auto-reply trong group) ---
+  if (
+    !isGroup &&
+    !msg.unsupportedKind &&
+    !msg.images?.length &&
+    text &&
+    isRegisterIntent(text)
+  ) {
     const customer = await getOrCreateTopic(
       api,
       msg.zaloUserId,
@@ -62,7 +75,9 @@ async function handleInbound(
     if (customer.subscriptionStatus === 'approved') {
       await sendToTopicSafe(api, customer, `ℹ️ Khách đã approved — nhắc đăng ký lại.`);
       try {
-        await adapter.sendText(msg.zaloUserId, 'Bạn đã được duyệt và đang nhận tin.');
+        await adapter.sendText(msg.zaloUserId, 'Bạn đã được duyệt và đang nhận tin.', {
+          threadKind: 'user',
+        });
       } catch {
         // ignore
       }
@@ -91,6 +106,7 @@ async function handleInbound(
         customer.blocked
           ? 'Tài khoản đang bị chặn. Vui lòng liên hệ quản trị.'
           : 'Đã nhận yêu cầu đăng ký. Vui lòng chờ quản trị viên duyệt.',
+        { threadKind: 'user' },
       );
     } catch (err) {
       logger.warn({ err, zaloUserId: msg.zaloUserId }, 'Failed to ack register on Zalo');
@@ -98,17 +114,31 @@ async function handleInbound(
     return;
   }
 
-  // --- Chưa có topic: không tạo, chỉ gợi ý đăng ký ---
+  // --- Chưa có trong DB ---
   if (!existing) {
     logger.info(
-      { zaloUserId: msg.zaloUserId, unsupportedKind: msg.unsupportedKind },
-      'Inbound from unknown Zalo user — skip topic create',
+      {
+        zaloUserId: msg.zaloUserId,
+        threadKind: msg.threadKind ?? 'user',
+        unsupportedKind: msg.unsupportedKind,
+      },
+      isGroup
+        ? 'Inbound from unknown Zalo group — skip (no register hint)'
+        : 'Inbound from unknown Zalo user — skip topic create',
     );
-    if (!msg.unsupportedKind && !msg.images?.length && text && !isUnsubscribeIntent(text)) {
+    // Chỉ gợi ý đăng ký cho 1-1; tuyệt đối không spam vào group
+    if (
+      !isGroup &&
+      !msg.unsupportedKind &&
+      !msg.images?.length &&
+      text &&
+      !isUnsubscribeIntent(text)
+    ) {
       try {
         await adapter.sendText(
           msg.zaloUserId,
           'Xin chào! Nhắn "đăng ký" hoặc /register để được xét duyệt nhận tin.',
+          { threadKind: 'user' },
         );
       } catch (err) {
         logger.warn({ err, zaloUserId: msg.zaloUserId }, 'Failed to hint register on Zalo');
@@ -118,21 +148,24 @@ async function handleInbound(
   }
 
   // Có thể topic bị xóa → getOrCreateTopic sẽ recreate nếu topic_missing
+  // Không truyền senderName làm displayName (tránh đổi tên topic group thành tên member)
   const customer = await getOrCreateTopic(
     api,
     msg.zaloUserId,
     adapter.mode,
-    msg.displayName,
+    isGroup ? undefined : msg.displayName,
   );
 
+  const statusPrefix =
+    customer.subscriptionStatus !== 'approved'
+      ? `[${customer.subscriptionStatus}] `
+      : customer.blocked
+        ? `[blocked] `
+        : '';
+
   if (msg.images && msg.images.length > 0) {
-    const prefix =
-      customer.subscriptionStatus !== 'approved'
-        ? `[${customer.subscriptionStatus}] `
-        : customer.blocked
-          ? `[blocked] `
-          : '';
-    const caption = text ? `${prefix}${text}` : prefix.trim() || undefined;
+    const captionBody = text || (isGroup ? '(ảnh)' : '');
+    const caption = formatInboundBody(msg, statusPrefix, captionBody).trim() || undefined;
     await sendPhotosToTopicSafe(api, customer, msg.images.map((i) => i.url), caption);
     return;
   }
@@ -141,15 +174,20 @@ async function handleInbound(
     await sendToTopicSafe(
       api,
       customer,
-      `[Chưa hỗ trợ] Khách gửi ${msg.unsupportedKind}` +
-        (msg.messageId ? ` (msg ${msg.messageId})` : ''),
+      formatInboundBody(
+        msg,
+        statusPrefix,
+        `[Chưa hỗ trợ] ${msg.unsupportedKind}` +
+          (msg.messageId ? ` (msg ${msg.messageId})` : ''),
+      ),
     );
     return;
   }
 
   if (!text) return;
 
-  if (isUnsubscribeIntent(text)) {
+  // Hủy đăng ký: chỉ 1-1
+  if (!isGroup && isUnsubscribeIntent(text)) {
     setSubscriptionStatus(msg.zaloUserId, adapter.mode, 'unsubscribed');
     await sendToTopicSafe(
       api,
@@ -160,6 +198,7 @@ async function handleInbound(
       await adapter.sendText(
         msg.zaloUserId,
         'Bạn đã hủy đăng ký nhận tin. Nhắn "đăng ký" hoặc /register nếu muốn đăng ký lại.',
+        { threadKind: 'user' },
       );
     } catch (err) {
       logger.warn({ err, zaloUserId: msg.zaloUserId }, 'Failed to ack unsubscribe on Zalo');
@@ -167,14 +206,7 @@ async function handleInbound(
     return;
   }
 
-  const prefix =
-    customer.subscriptionStatus !== 'approved'
-      ? `[${customer.subscriptionStatus}] `
-      : customer.blocked
-        ? `[blocked] `
-        : '';
-
-  await sendToTopicSafe(api, customer, `${prefix}${text}`);
+  await sendToTopicSafe(api, customer, formatInboundBody(msg, statusPrefix, text));
 }
 
 async function sendToTopicSafe(api: Api, customer: Customer, text: string): Promise<void> {
@@ -184,7 +216,11 @@ async function sendToTopicSafe(api: Api, customer: Customer, text: string): Prom
       message_thread_id: customer.telegramTopicId,
     });
     logger.info(
-      { zaloUserId: customer.zaloUserId, topicId: customer.telegramTopicId },
+      {
+        zaloUserId: customer.zaloUserId,
+        topicId: customer.telegramTopicId,
+        threadKind: customer.threadKind,
+      },
       'Forwarded Zalo → Telegram topic',
     );
   } catch (err) {

@@ -6,9 +6,18 @@ export type InboundImage = {
 };
 
 export type NormalizedInbound = {
+  /**
+   * Thread id để map topic: user id (1-1) hoặc **group id** (tin trong group).
+   * Không dùng id người gửi trong group.
+   */
   zaloUserId: string;
+  threadKind?: ZaloThreadKind;
+  /** Người gửi trong group (uidFrom) — chỉ để hiển thị */
+  senderId?: string;
+  senderName?: string;
   /** Empty when only images / unsupported */
   text: string;
+  /** Tên hiển thị thread (user name hoặc group name nếu biết) */
   displayName?: string;
   messageId?: string;
   /** Photo(s) from Zalo — prefer over unsupportedKind */

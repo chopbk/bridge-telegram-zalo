@@ -1,3 +1,4 @@
+import { getEnv } from '../config/env.js';
 import logger from '../config/logger.js';
 import {
   claimNextBroadcastItem,
@@ -14,6 +15,7 @@ import {
 } from '../db/jobs.js';
 import { notifyAdmins } from '../telegram/notify.js';
 import type { ZaloAdapter } from '../zalo/types.js';
+import { bufferToZaloImage, downloadToBuffer, telegramFileUrl } from './media.js';
 import { broadcastTargets } from './mapper.js';
 
 export type BroadcastResult = {
@@ -31,11 +33,45 @@ export async function broadcastChannelText(
   text: string,
   opts?: { channelMessageId?: number; report?: boolean },
 ): Promise<BroadcastResult> {
+  return enqueueAndDrainBroadcast(adapter, {
+    text,
+    channelMessageId: opts?.channelMessageId,
+    report: opts?.report,
+  });
+}
+
+/** Broadcast ảnh channel (file_id Telegram — tải lại lúc gửi từng khách). */
+export async function broadcastChannelPhotos(
+  adapter: ZaloAdapter,
+  imageFileIds: string[],
+  opts?: { caption?: string; channelMessageId?: number; report?: boolean },
+): Promise<BroadcastResult> {
+  if (!imageFileIds.length) {
+    throw new Error('broadcastChannelPhotos: empty imageFileIds');
+  }
+  return enqueueAndDrainBroadcast(adapter, {
+    text: (opts?.caption ?? '').trim(),
+    imageFileIds,
+    channelMessageId: opts?.channelMessageId,
+    report: opts?.report,
+  });
+}
+
+async function enqueueAndDrainBroadcast(
+  adapter: ZaloAdapter,
+  opts: {
+    text: string;
+    imageFileIds?: string[];
+    channelMessageId?: number;
+    report?: boolean;
+  },
+): Promise<BroadcastResult> {
   const targets = broadcastTargets(adapter.mode);
   const { parentId } = createBroadcastJob({
-    text,
+    text: opts.text,
     provider: adapter.mode,
-    channelMessageId: opts?.channelMessageId,
+    channelMessageId: opts.channelMessageId,
+    imageFileIds: opts.imageFileIds,
     targets: targets.map((t) => ({
       zaloUserId: t.zaloUserId,
       displayName: t.displayName,
@@ -44,13 +80,17 @@ export async function broadcastChannelText(
   });
 
   logger.info(
-    { count: targets.length, jobId: parentId },
+    {
+      count: targets.length,
+      jobId: parentId,
+      photos: opts.imageFileIds?.length ?? 0,
+    },
     'Broadcasting channel post to Zalo customers',
   );
 
   const result = await drainBroadcastItems(adapter, parentId);
 
-  if (opts?.report !== false) {
+  if (opts.report !== false) {
     await reportBroadcast(result);
   }
 
@@ -114,9 +154,20 @@ export async function drainBroadcastItems(
     }
 
     try {
-      await adapter.sendText(payload.zaloUserId, payload.text, {
-        threadKind: payload.threadKind ?? 'user',
-      });
+      if (payload.imageFileIds && payload.imageFileIds.length > 0) {
+        if (!adapter.sendImages) {
+          throw new Error('Adapter không hỗ trợ gửi ảnh');
+        }
+        const images = await downloadTelegramFileIds(payload.imageFileIds);
+        await adapter.sendImages(payload.zaloUserId, images, {
+          threadKind: payload.threadKind ?? 'user',
+          caption: payload.text || undefined,
+        });
+      } else {
+        await adapter.sendText(payload.zaloUserId, payload.text, {
+          threadKind: payload.threadKind ?? 'user',
+        });
+      }
       markJobDone(job.id);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -166,4 +217,30 @@ async function reportBroadcast(result: BroadcastResult): Promise<void> {
     lines.push(`Gửi lại: /retrybroadcast ${result.jobId}`);
   }
   await notifyAdmins(lines.join('\n'));
+}
+
+async function downloadTelegramFileIds(fileIds: string[]) {
+  const env = getEnv();
+  // Lazy import Api via getFile through raw Telegram HTTP to avoid needing Bot ctx here
+  const out = [];
+  for (let i = 0; i < fileIds.length; i++) {
+    const metaRes = await fetch(
+      `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/getFile?file_id=${encodeURIComponent(fileIds[i]!)}`,
+    );
+    const meta = (await metaRes.json()) as {
+      ok?: boolean;
+      result?: { file_path?: string };
+      description?: string;
+    };
+    if (!meta.ok || !meta.result?.file_path) {
+      throw new Error(`getFile failed: ${meta.description ?? metaRes.status}`);
+    }
+    const url = await telegramFileUrl(env.TELEGRAM_BOT_TOKEN, meta.result.file_path);
+    const buf = await downloadToBuffer(url);
+    const ext = meta.result.file_path.includes('.')
+      ? meta.result.file_path.split('.').pop() || 'jpg'
+      : 'jpg';
+    out.push(bufferToZaloImage(buf, `broadcast-${i + 1}.${ext}`));
+  }
+  return out;
 }

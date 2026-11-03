@@ -117,6 +117,8 @@ declare module 'zca-js' {
       msgType?: string;
       dName?: string;
       ts?: string | number;
+      uidFrom?: string | number;
+      idTo?: string | number;
     };
   };
 

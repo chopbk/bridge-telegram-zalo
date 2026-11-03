@@ -122,7 +122,7 @@ Reply text trong topic khách → Zalo **chỉ khi** người gửi là admin v�
 |------|---------|
 | A | Khách → Zalo → topic; đăng ký/hủy; media chưa hỗ trợ → báo topic |
 | B | Admin reply trong topic → Zalo khách (nếu approved) |
-| C | Post text kênh → job SQLite fan-out + báo cáo admin (ok/fail) |
+| C | Post text/ảnh kênh → job SQLite fan-out + báo cáo admin (ok/fail) |
 
 MVP chỉ **gửi** text; nhận media thì thông báo trên Telegram.
 

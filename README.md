@@ -114,7 +114,7 @@ Topic replies (text + ảnh) forward to Zalo **only for admins**, and only when 
 |------|----------|
 | A | Customer → Zalo → topic (text + ảnh); register/unsubscribe; media khác → báo topic |
 | B | Admin reply trong topic → Zalo: text, 1 ảnh, hoặc album nhiều ảnh (nếu approved) |
-| C | Channel text → SQLite jobs fan-out + admin report (ok/fail) |
+| C | Channel text/ảnh → SQLite jobs fan-out + admin report (ok/fail) |
 
 Ảnh 2 chiều (personal mode): Zalo `chat.photo` → Telegram `sendPhoto`/`sendMediaGroup`; Telegram photo/album → Zalo `sendMessage` attachments.
 
