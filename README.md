@@ -81,7 +81,7 @@ Only users in `TELEGRAM_ADMIN_IDS`, in the **forum group** or **private chat wit
 | `/users 2` | Page 2 |
 | `/user <zalo_id>` | One customer detail (or `/user` inside topic) |
 | `/zalofriends` | Friends on the Zalo account (personal) |
-| `/zalochats` | Recent chats (users + groups); filter with `/zalochats group` |
+| `/zalochats` | Recent chats (users + groups); `/zalochats group` sorts by last message (probes history) |
 | `/useradd <zalo_id> [name]` | Add to allowlist + create topic |
 | `/useredit <zalo_id> name=… status=approved muted=0 blocked=0` | Edit |
 | `/userdel <zalo_id>` | Delete from DB (+ topic best-effort) |
