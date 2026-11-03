@@ -9,17 +9,36 @@ Bridge **Telegram ↔ Zalo**: mỗi khách một forum topic, reply topic → Za
 
 - Node.js ≥ **22.5** (dùng built-in `node:sqlite`; khuyến nghị 22/24 LTS)
 - Telegram bot + **supergroup bật Topics** + **channel** (bot là admin)
-- Mode `bot`: Zalo Bot token + HTTPS webhook
-- Mode `personal`: nick Zalo phụ + `npm run zalo:login`
+- **`TELEGRAM_ADMIN_IDS` bắt buộc** (không để trống)
+- Mode `personal` (**MVP khuyến nghị**): nick Zalo phụ + `npm run zalo:login`
+- Mode `bot`: Zalo Bot token; production webhook cần secret
 
 ## Cài đặt nhanh
 
 ```bash
 cp .env.example .env
-# điền TELEGRAM_* và credential theo mode
+# điền TELEGRAM_* (kèm ADMIN_IDS) và credential theo mode
 npm install
+npm run zalo:login   # nếu personal
 npm run dev
 ```
+
+### Mode Zalo cá nhân (MVP trước)
+
+```env
+ZALO_MODE=personal
+ZALO_SESSION_PATH=./data/zalo-session.json
+ZALO_MIN_SEND_INTERVAL_MS=1500
+ZALO_SEND_MAX_PER_MINUTE=20
+TELEGRAM_ADMIN_IDS=123456789
+```
+
+```bash
+npm run zalo:login   # quét QR → lưu session
+npm run dev
+```
+
+Dùng **nick phụ**. `zca-js` không chính thức — có rủi ro hạn chế/khóa tài khoản. Rate limit + delay giúp giảm rủi ro khi broadcast.
 
 ### Mode Zalo Bot
 
@@ -29,63 +48,55 @@ ZALO_BOT_TOKEN=...
 PORT=3080
 ```
 
-**Local / dev (mặc định):** long polling `getUpdates` — **không cần** HTTPS public.
+**Local / dev (mặc định):** long polling `getUpdates`.
 
-```env
-# tuỳ chọn; tự = polling khi NODE_ENV != production
-ZALO_BOT_TRANSPORT=polling
-```
-
-**Production:** bật webhook + HTTPS:
-
-```env
-NODE_ENV=production
-ZALO_BOT_TRANSPORT=webhook
-ZALO_BOT_WEBHOOK_PATH=/webhooks/zalo
-```
-
-Nginx → `http://127.0.0.1:3080`, rồi `setWebhook` tới `https://domain/webhooks/zalo`.
-
-Polling và webhook **không dùng song song**; khi start polling sẽ gọi `deleteWebhook` trước.
+**Production:** webhook + HTTPS + `ZALO_BOT_WEBHOOK_SECRET` (header `X-Zalo-Bot-Api-Secret-Token`).
 
 Khách **phải nhắn bot Zalo trước** mới nhận/gửi được.
 
-### Mode Zalo cá nhân
+## Đăng ký khách
 
-```env
-ZALO_MODE=personal
-ZALO_SESSION_PATH=./data/zalo-session.json
-ZALO_MIN_SEND_INTERVAL_MS=1500
-```
+1. Khách nhắn Zalo: `đăng ký` / `dang ky` / `/start`
+2. Hệ thống tạo topic (nếu chưa) với trạng thái **pending**, báo admin trong topic
+3. Admin trong topic: `/approve` hoặc `/reject`
+4. Chỉ khách **approved**, không muted, không blocked mới nhận broadcast
+5. Khách hủy: `hủy đăng ký` / `huy dang ky` / `/stop` → `unsubscribed`
 
-```bash
-npm run zalo:login   # quét QR → lưu session
-npm run dev
-```
-
-Dùng **nick phụ**. `zca-js` không chính thức — có rủi ro hạn chế/khóa tài khoản.
+**Mute** (`/mute`) chỉ tạm tắt broadcast — khác hủy đăng ký của khách.
 
 ## Lệnh admin (Telegram)
 
-Chỉ user trong `TELEGRAM_ADMIN_IDS` (để trống = mọi người, chỉ dùng khi dev):
+Chỉ trong **forum group** và user thuộc `TELEGRAM_ADMIN_IDS`:
 
 | Lệnh | Ý nghĩa |
 |------|---------|
 | `/mode` | Mode Zalo đang chạy |
-| `/status` | Số khách / target broadcast |
-| `/list` | Danh sách khách |
-| `/mute` | Mute broadcast (chạy **trong topic** khách) |
-| `/unmute` | Bỏ mute |
+| `/status` | Đếm theo status + target broadcast |
+| `/list [page] [status]` | Danh sách phân trang (vd `/list 2 pending`) |
+| `/search <query>` | Tìm theo tên / zalo id |
+| `/approve` `/reject` | Duyệt / từ chối (trong topic khách) |
+| `/block` `/unblock` | Chặn cứng |
+| `/mute` `/unmute` | Tạm tắt/bật broadcast |
+| `/recreate` | Tạo lại topic nếu bị xóa |
+| `/retry_broadcast <jobId>` | Gửi lại các item fail của broadcast |
+
+Reply text trong topic khách → Zalo **chỉ khi** người gửi là admin và khách `approved`.
 
 ## Luồng tin
 
 | Luồng | Hành vi |
 |------|---------|
-| A | Khách → Zalo → tạo/mở topic Telegram |
-| B | Admin reply trong topic → Zalo khách |
-| C | Post text lên channel đã cấu hình → fan-out khách active, không muted |
+| A | Khách → Zalo → topic; đăng ký/hủy; media chưa hỗ trợ → báo topic |
+| B | Admin reply trong topic → Zalo khách (nếu approved) |
+| C | Post text kênh → job SQLite fan-out + báo cáo admin (ok/fail) |
 
-MVP chỉ hỗ trợ **text**.
+MVP chỉ **gửi** text; nhận media thì thông báo trên Telegram.
+
+## Độ tin cậy
+
+- Dedup inbound theo `(provider, message_id)`
+- Broadcast lưu job SQLite, retry có giới hạn, resume sau restart
+- Mapping theo `(provider, zalo_user_id)` — đổi mode không lẫn khách
 
 ## Production
 

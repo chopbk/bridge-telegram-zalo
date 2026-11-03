@@ -8,23 +8,31 @@ import {
   findByTopicId,
   insertCustomer,
   listBroadcastTargets,
+  listCustomersPage,
+  searchCustomers,
   setMuted,
+  setSubscriptionStatus,
 } from '../src/db/customers.js';
+import { claimProcessedMessage } from '../src/db/processed.js';
+
+function setupEnv(dir: string): void {
+  process.env.ZALO_MODE = 'personal';
+  process.env.TELEGRAM_BOT_TOKEN = 'test';
+  process.env.TELEGRAM_FORUM_GROUP_ID = '-1001';
+  process.env.TELEGRAM_CHANNEL_ID = '-1002';
+  process.env.TELEGRAM_ADMIN_IDS = '111';
+  process.env.DATABASE_PATH = join(dir, 'test.db');
+  resetEnvCache();
+  closeDb();
+  getDb();
+}
 
 describe('customers db', () => {
   let dir: string;
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'tg-zalo-'));
-    process.env.ZALO_MODE = 'bot';
-    process.env.TELEGRAM_BOT_TOKEN = 'test';
-    process.env.TELEGRAM_FORUM_GROUP_ID = '-1001';
-    process.env.TELEGRAM_CHANNEL_ID = '-1002';
-    process.env.ZALO_BOT_TOKEN = 'zbot';
-    process.env.DATABASE_PATH = join(dir, 'test.db');
-    resetEnvCache();
-    closeDb();
-    getDb();
+    setupEnv(dir);
   });
 
   afterEach(() => {
@@ -33,25 +41,92 @@ describe('customers db', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('inserts and finds by topic', () => {
+  it('inserts pending and finds by topic', () => {
     const c = insertCustomer({
       zaloUserId: 'u1',
       telegramTopicId: 42,
-      provider: 'bot',
+      provider: 'personal',
       displayName: 'Test',
     });
     expect(c.zaloUserId).toBe('u1');
-    expect(findByTopicId(42)?.displayName).toBe('Test');
+    expect(c.subscriptionStatus).toBe('pending');
+    expect(findByTopicId(42, 'personal')?.displayName).toBe('Test');
   });
 
-  it('mute removes from broadcast targets', () => {
+  it('pending customers are not broadcast targets', () => {
     insertCustomer({
       zaloUserId: 'u2',
       telegramTopicId: 7,
       provider: 'personal',
     });
-    expect(listBroadcastTargets()).toHaveLength(1);
-    setMuted('u2', true);
-    expect(listBroadcastTargets()).toHaveLength(0);
+    expect(listBroadcastTargets('personal')).toHaveLength(0);
+  });
+
+  it('approved unmuted customers are broadcast targets; mute removes them', () => {
+    insertCustomer({
+      zaloUserId: 'u3',
+      telegramTopicId: 8,
+      provider: 'personal',
+      subscriptionStatus: 'approved',
+    });
+    expect(listBroadcastTargets('personal')).toHaveLength(1);
+    setMuted('u3', 'personal', true);
+    expect(listBroadcastTargets('personal')).toHaveLength(0);
+  });
+
+  it('unsubscribe removes from broadcast even if not muted', () => {
+    insertCustomer({
+      zaloUserId: 'u4',
+      telegramTopicId: 9,
+      provider: 'personal',
+      subscriptionStatus: 'approved',
+    });
+    setSubscriptionStatus('u4', 'personal', 'unsubscribed');
+    expect(listBroadcastTargets('personal')).toHaveLength(0);
+  });
+
+  it('scopes customers by provider', () => {
+    insertCustomer({
+      zaloUserId: 'same',
+      telegramTopicId: 1,
+      provider: 'personal',
+      subscriptionStatus: 'approved',
+    });
+    insertCustomer({
+      zaloUserId: 'same',
+      telegramTopicId: 2,
+      provider: 'bot',
+      subscriptionStatus: 'approved',
+    });
+    expect(listBroadcastTargets('personal')).toHaveLength(1);
+    expect(listBroadcastTargets('bot')).toHaveLength(1);
+  });
+
+  it('paginates and searches', () => {
+    for (let i = 0; i < 5; i++) {
+      insertCustomer({
+        zaloUserId: `u${i}`,
+        telegramTopicId: 100 + i,
+        provider: 'personal',
+        displayName: i === 2 ? 'Alice Nguyen' : `User ${i}`,
+      });
+    }
+    const page1 = listCustomersPage({
+      provider: 'personal',
+      page: 1,
+      pageSize: 2,
+    });
+    expect(page1.items).toHaveLength(2);
+    expect(page1.total).toBe(5);
+
+    const found = searchCustomers('personal', 'Alice');
+    expect(found).toHaveLength(1);
+    expect(found[0]?.displayName).toBe('Alice Nguyen');
+  });
+
+  it('dedups processed messages', () => {
+    expect(claimProcessedMessage('personal', 'm1')).toBe(true);
+    expect(claimProcessedMessage('personal', 'm1')).toBe(false);
+    expect(claimProcessedMessage('bot', 'm1')).toBe(true);
   });
 });

@@ -1,6 +1,6 @@
 # tg-zalo
 
-Bridge **Telegram ↔ Zalo**: one forum topic per customer, topic replies go to Zalo, channel posts broadcast to all active customers.
+Bridge **Telegram ↔ Zalo**: one forum topic per customer, topic replies go to Zalo, channel posts broadcast to approved customers.
 
 - Spec: [SPEC.md](./SPEC.md)
 - Vietnamese guide: [docs/README.vi.md](./docs/README.vi.md)
@@ -9,17 +9,36 @@ Bridge **Telegram ↔ Zalo**: one forum topic per customer, topic replies go to 
 
 - Node.js ≥ **22.5** (uses built-in `node:sqlite`; 22/24 LTS recommended)
 - Telegram bot + **Topics-enabled supergroup** + **channel** (bot must be admin)
-- `bot` mode: Zalo Bot token + public HTTPS webhook
-- `personal` mode: secondary Zalo account + `npm run zalo:login`
+- **`TELEGRAM_ADMIN_IDS` required** (comma-separated Telegram user ids)
+- `personal` mode (**MVP first**): secondary Zalo account + `npm run zalo:login`
+- `bot` mode: Zalo Bot token; production webhook needs `ZALO_BOT_WEBHOOK_SECRET`
 
 ## Quick start
 
 ```bash
 cp .env.example .env
-# fill TELEGRAM_* and credentials for your chosen mode
+# fill TELEGRAM_* (including ADMIN_IDS) and credentials for your chosen mode
 npm install
+npm run zalo:login   # personal mode
 npm run dev
 ```
+
+### Zalo personal mode (recommended MVP)
+
+```env
+ZALO_MODE=personal
+ZALO_SESSION_PATH=./data/zalo-session.json
+ZALO_MIN_SEND_INTERVAL_MS=1500
+ZALO_SEND_MAX_PER_MINUTE=20
+TELEGRAM_ADMIN_IDS=123456789
+```
+
+```bash
+npm run zalo:login   # scan QR → save session
+npm run dev
+```
+
+Use a **secondary** Zalo account. Unofficial automation (`zca-js`) can get accounts restricted. Min-interval + max-per-minute reduce blast risk.
 
 ### Zalo Bot mode
 
@@ -29,63 +48,55 @@ ZALO_BOT_TOKEN=...
 PORT=3080
 ```
 
-**Local / dev (default):** long polling via `getUpdates` — no public HTTPS needed.
+**Local / dev (default):** long polling via `getUpdates`.
 
-```env
-# optional; auto = polling when NODE_ENV != production
-ZALO_BOT_TRANSPORT=polling
-```
-
-**Production:** set webhook transport and expose HTTPS:
-
-```env
-NODE_ENV=production
-ZALO_BOT_TRANSPORT=webhook
-ZALO_BOT_WEBHOOK_PATH=/webhooks/zalo
-```
-
-Point Nginx HTTPS to `http://127.0.0.1:3080`, then `setWebhook` to `https://your-domain/webhooks/zalo`.
-
-Polling and webhook are mutually exclusive; starting in polling mode calls `deleteWebhook` first.
+**Production:** webhook + HTTPS + `ZALO_BOT_WEBHOOK_SECRET` (`X-Zalo-Bot-Api-Secret-Token`).
 
 Customers must message the Zalo bot once before they can receive messages.
 
-### Zalo personal mode
+## Customer registration
 
-```env
-ZALO_MODE=personal
-ZALO_SESSION_PATH=./data/zalo-session.json
-ZALO_MIN_SEND_INTERVAL_MS=1500
-```
+1. Customer texts Zalo: `đăng ký` / `dang ky` / `/start`
+2. Bridge opens a topic as **pending** and notifies admins in-topic
+3. Admin runs `/approve` or `/reject` inside the topic
+4. Only **approved**, unmuted, unblocked customers receive channel broadcasts
+5. Unsubscribe: `hủy đăng ký` / `huy dang ky` / `/stop`
 
-```bash
-npm run zalo:login   # scan QR → save session
-npm run dev
-```
-
-Use a **secondary** Zalo account. Unofficial automation (`zca-js`) can get accounts restricted.
+Admin `/mute` only pauses broadcast — it is not the same as customer unsubscribe.
 
 ## Admin commands (Telegram)
 
-Only users listed in `TELEGRAM_ADMIN_IDS` (empty = allow everyone; for local/dev only):
+Only inside the **forum group**, and only users in `TELEGRAM_ADMIN_IDS`:
 
 | Command | Description |
 |---------|-------------|
 | `/mode` | Active Zalo mode |
-| `/status` | Customer count / broadcast targets |
-| `/list` | Customer list |
-| `/mute` | Mute broadcast (**run inside** the customer topic) |
-| `/unmute` | Unmute |
+| `/status` | Counts by subscription status + broadcast targets |
+| `/list [page] [status]` | Paginated list (e.g. `/list 2 pending`) |
+| `/search <query>` | Search by name / Zalo id |
+| `/approve` `/reject` | Approve / reject (in customer topic) |
+| `/block` `/unblock` | Hard block |
+| `/mute` `/unmute` | Pause / resume broadcast |
+| `/recreate` | Recreate deleted forum topic |
+| `/retry_broadcast <jobId>` | Resend failed broadcast items |
+
+Topic text replies forward to Zalo **only for admins**, and only when the customer is approved.
 
 ## Message flows
 
 | Flow | Behavior |
 |------|----------|
-| A | Customer → Zalo → creates/opens Telegram topic |
-| B | Admin reply in topic → Zalo customer |
-| C | Text post on configured channel → fan-out to active, unmuted customers |
+| A | Customer → Zalo → topic; register/unsubscribe; unsupported media → notify topic |
+| B | Admin reply in topic → Zalo (if approved) |
+| C | Channel text → SQLite jobs fan-out + admin report (ok/fail) |
 
-MVP is **text only**.
+MVP **sends** text only; inbound non-text is reported on Telegram.
+
+## Reliability
+
+- Inbound dedup by `(provider, message_id)`
+- Broadcast jobs in SQLite with limited retries; resume after restart
+- Mapping keyed by `(provider, zalo_user_id)`
 
 ## Production
 

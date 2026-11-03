@@ -54,4 +54,22 @@ describe('normalizeBotUpdate', () => {
     expect(normalizeBotUpdate({ foo: 1 })).toBeNull();
     expect(normalizeBotUpdate(null)).toBeNull();
   });
+
+  it('marks non-text bot messages as unsupported', () => {
+    const msg = normalizeBotUpdate({
+      message: {
+        message_id: 11,
+        photo: [{ file_id: 'x' }],
+        chat: { id: 'user-abc' },
+        from: { first_name: 'An' },
+      },
+    });
+    expect(msg).toEqual({
+      zaloUserId: 'user-abc',
+      text: '',
+      displayName: 'An',
+      messageId: '11',
+      unsupportedKind: 'photo',
+    });
+  });
 });
