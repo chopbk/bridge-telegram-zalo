@@ -176,7 +176,7 @@ Chỉ `TELEGRAM_ADMIN_IDS`, trong **forum** hoặc **chat riêng với bot**. L�
 | `/users` `[page]` `[all\|allowed\|pending\|ids]` | Khách trong DB |
 | `/user` `[zalo_id]` | Chi tiết |
 | `/zalofriends` | Bạn bè nick Zalo (personal) |
-| `/zalochats` `[user\|group]` | Chat gần đây; `group` probe tin cuối |
+| `/zalochats` `[user\|group]` `[n]` | Chat gần đây **full** (tách tin); `group` probe tin cuối |
 | `/useradd` `<id>` `[group\|user]` `[tên]` | Thêm + tạo topic |
 | `/useredit` … | Sửa field |
 | `/userdel` `<id>` | Xoá |

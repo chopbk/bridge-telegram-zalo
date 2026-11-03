@@ -100,17 +100,36 @@ function parseBool(raw: string): boolean | null {
   return null;
 }
 
-/** Plain text — tránh Markdown phá lệnh có dấu _ hoặc id. */
+/** Plain text — tách tin theo ~3900 ký tự, ưu tiên cắt ở xuống dòng. */
 async function replyChunks(ctx: Context, text: string): Promise<void> {
-  if (text.length <= 3900) {
+  const MAX = 3900;
+  if (text.length <= MAX) {
     await ctx.reply(text);
     return;
   }
-  let rest = text;
-  while (rest.length > 0) {
-    await ctx.reply(rest.slice(0, 3900));
-    rest = rest.slice(3900);
+  const lines = text.split('\n');
+  let buf = '';
+  for (const line of lines) {
+    const next = buf ? `${buf}\n${line}` : line;
+    if (next.length <= MAX) {
+      buf = next;
+      continue;
+    }
+    if (buf) {
+      await ctx.reply(buf);
+      buf = '';
+    }
+    if (line.length <= MAX) {
+      buf = line;
+      continue;
+    }
+    let rest = line;
+    while (rest.length > 0) {
+      await ctx.reply(rest.slice(0, MAX));
+      rest = rest.slice(MAX);
+    }
   }
+  if (buf) await ctx.reply(buf);
 }
 
 export function createTelegramBot(adapter: ZaloAdapter): Bot {
@@ -126,7 +145,7 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
         'Quản lý người dùng Zalo:',
         '/users [page] [all|allowed|pending|ids] — đã ghi nhận trong bridge',
         '/zalofriends [page] — bạn bè trên nick Zalo (lấy id để add)',
-        '/zalochats [page|n] — chat gần đây (user + group)',
+        '/zalochats [user|group] [n=200] — chat gần đây (full, tách tin)',
         '/user <zalo_id> — chi tiết 1 khách',
         '/useradd <zalo_id> [group|user] [tên] — thêm allowlist (group gửi đúng group)',
         '/useredit <zalo_id> name=.. status=.. kind=group|user muted=0|1 blocked=0|1',
@@ -296,7 +315,7 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
   });
 
   /**
-   * Chat gần đây với nick Zalo (1-1 + group).
+   * Chat gần đây với nick Zalo (1-1 + group) — gửi full, tách tin tránh limit.
    */
   bot.command(['zalochats', 'zalo_chats'], async (ctx) => {
     if (!(await requireAdmin(ctx))) return;
@@ -307,8 +326,7 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
 
     const raw = ctx.match?.toString().trim() ?? '';
     const parts = raw.split(/\s+/).filter(Boolean);
-    let page = 1;
-    let limit = 50;
+    let limit = 200;
     let filter: 'all' | 'user' | 'group' = 'all';
     for (const p of parts) {
       if (p === 'user' || p === 'users' || p === 'friend' || p === 'friends') filter = 'user';
@@ -316,28 +334,17 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
       else if (p.startsWith('n=') || p.startsWith('limit=')) {
         const n = Number(p.split('=')[1]);
         if (Number.isFinite(n)) limit = Math.min(200, Math.max(1, n));
+      } else if (/^\d+$/.test(p)) {
+        limit = Math.min(200, Math.max(1, Number(p)));
       }
     }
-    const nums = parts.filter((p) => /^\d+$/.test(p)).map(Number);
-    if (nums.length === 1) {
-      const n = nums[0]!;
-      if (n <= 20) page = n;
-      else limit = Math.min(200, Math.max(1, n));
-    } else if (nums.length >= 2) {
-      page = Math.max(1, nums[0]!);
-      limit = Math.min(200, Math.max(1, nums[1]!));
-    }
-
-    const pageSize = env.LIST_PAGE_SIZE;
 
     try {
       const focusLabel =
         filter === 'group' ? 'group (đang probe tin cuối…)' : filter === 'user' ? 'user' : 'user + group';
-      await ctx.reply(`Đang lấy chat gần đây — ${focusLabel}`);
-      // focus=group: probe history để sort đúng; tránh lấy all rồi filter (mất thứ tự)
+      await ctx.reply(`Đang lấy chat gần đây — ${focusLabel} (full list)`);
       const chats = await adapter.listRecentChats(limit, {
         focus: filter,
-        // Chỉ probe history khi lọc group — chính xác hơn, có thể mất vài giây
         probeGroupHistory: filter === 'group',
       });
 
@@ -348,24 +355,20 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
         return;
       }
 
-      const totalPages = Math.max(1, Math.ceil(chats.length / pageSize));
-      const safePage = Math.min(page, totalPages);
-      const start = (safePage - 1) * pageSize;
-      const slice = chats.slice(start, start + pageSize);
       const userCount = chats.filter((c) => c.kind !== 'group').length;
       const groupCount = chats.filter((c) => c.kind === 'group').length;
       const lines = [
-        `Chat gần đây — trang ${safePage}/${totalPages} (${chats.length}: ${userCount} user, ${groupCount} group)`,
-        'Sắp xếp: ghim → hoạt động gần nhất (không dùng ngày tạo group)',
-        'User → /useradd <zalo_id> [tên] · lọc: /zalochats user | /zalochats group',
-        ...slice.map((c, i) => {
+        `Chat gần đây — ${chats.length} mục (${userCount} user, ${groupCount} group)`,
+        'Sắp xếp: ghim → hoạt động gần nhất',
+        'Thêm: /useradd <id> [group|user] [tên] · lọc: /zalochats user | group',
+        ...chats.map((c, i) => {
           const kind = c.kind === 'group' ? 'group' : 'user';
           const extra =
             kind === 'group' && c.memberCount != null ? ` · ${c.memberCount} mem` : '';
           const when = c.lastActiveAt
             ? new Date(c.lastActiveAt).toLocaleString('vi-VN', { hour12: false })
             : 'chưa rõ';
-          return `${start + i + 1}. [${kind}] ${c.displayName}\n   id=${c.zaloUserId}${extra} · ${when}`;
+          return `${i + 1}. [${kind}] ${c.displayName}\n   id=${c.zaloUserId}${extra} · ${when}`;
         }),
       ];
       await replyChunks(ctx, lines.join('\n'));
