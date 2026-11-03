@@ -1,37 +1,56 @@
 # tg-zalo
 
-Bridge **Telegram ↔ Zalo**: mỗi khách một forum topic, reply topic → Zalo, post kênh → broadcast.
+Bridge **Telegram ↔ Zalo**: one forum topic per customer, topic replies go to Zalo, channel posts broadcast to all active customers.
 
-Xem [SPEC.md](./SPEC.md).
+- Spec: [SPEC.md](./SPEC.md)
+- Vietnamese guide: [docs/README.vi.md](./docs/README.vi.md)
 
-## Yêu cầu
+## Requirements
 
-- Node.js ≥ **22.5** (dùng built-in `node:sqlite`; khuyến nghị 22/24 LTS)
-- Telegram bot + **supergroup bật Topics** + **channel** (bot là admin)
-- Mode `bot`: Zalo Bot token + HTTPS webhook
-- Mode `personal`: nick Zalo phụ + `npm run zalo:login`
+- Node.js ≥ **22.5** (uses built-in `node:sqlite`; 22/24 LTS recommended)
+- Telegram bot + **Topics-enabled supergroup** + **channel** (bot must be admin)
+- `bot` mode: Zalo Bot token + public HTTPS webhook
+- `personal` mode: secondary Zalo account + `npm run zalo:login`
 
-## Cài đặt
+## Quick start
 
 ```bash
 cp .env.example .env
-# điền TELEGRAM_* và credential theo mode
+# fill TELEGRAM_* and credentials for your chosen mode
 npm install
 npm run dev
 ```
 
-### Mode Zalo Bot
+### Zalo Bot mode
 
 ```env
 ZALO_MODE=bot
 ZALO_BOT_TOKEN=...
-ZALO_BOT_WEBHOOK_PATH=/webhooks/zalo
 PORT=3080
 ```
 
-Nginx trỏ HTTPS → `http://127.0.0.1:3080`, đăng ký webhook Zalo tới `https://domain/webhooks/zalo`.
+**Local / dev (default):** long polling via `getUpdates` — no public HTTPS needed.
 
-### Mode Zalo cá nhân
+```env
+# optional; auto = polling when NODE_ENV != production
+ZALO_BOT_TRANSPORT=polling
+```
+
+**Production:** set webhook transport and expose HTTPS:
+
+```env
+NODE_ENV=production
+ZALO_BOT_TRANSPORT=webhook
+ZALO_BOT_WEBHOOK_PATH=/webhooks/zalo
+```
+
+Point Nginx HTTPS to `http://127.0.0.1:3080`, then `setWebhook` to `https://your-domain/webhooks/zalo`.
+
+Polling and webhook are mutually exclusive; starting in polling mode calls `deleteWebhook` first.
+
+Customers must message the Zalo bot once before they can receive messages.
+
+### Zalo personal mode
 
 ```env
 ZALO_MODE=personal
@@ -40,21 +59,33 @@ ZALO_MIN_SEND_INTERVAL_MS=1500
 ```
 
 ```bash
-npm run zalo:login   # quét QR → lưu session
+npm run zalo:login   # scan QR → save session
 npm run dev
 ```
 
-## Lệnh admin (Telegram)
+Use a **secondary** Zalo account. Unofficial automation (`zca-js`) can get accounts restricted.
 
-Chỉ user trong `TELEGRAM_ADMIN_IDS` (để trống = mọi người, chỉ dùng khi dev):
+## Admin commands (Telegram)
 
-| Lệnh | Ý nghĩa |
-|------|---------|
-| `/mode` | Mode Zalo đang chạy |
-| `/status` | Số khách / target broadcast |
-| `/list` | Danh sách khách |
-| `/mute` | Mute broadcast (chạy **trong topic** khách) |
-| `/unmute` | Bỏ mute |
+Only users listed in `TELEGRAM_ADMIN_IDS` (empty = allow everyone; for local/dev only):
+
+| Command | Description |
+|---------|-------------|
+| `/mode` | Active Zalo mode |
+| `/status` | Customer count / broadcast targets |
+| `/list` | Customer list |
+| `/mute` | Mute broadcast (**run inside** the customer topic) |
+| `/unmute` | Unmute |
+
+## Message flows
+
+| Flow | Behavior |
+|------|----------|
+| A | Customer → Zalo → creates/opens Telegram topic |
+| B | Admin reply in topic → Zalo customer |
+| C | Text post on configured channel → fan-out to active, unmuted customers |
+
+MVP is **text only**.
 
 ## Production
 
@@ -63,13 +94,17 @@ npm run build
 npm run pm2:start
 ```
 
-`ecosystem.config.cjs`: **1 instance, fork** (bắt buộc với personal session).
+`ecosystem.config.cjs` uses **1 instance, fork mode** (required for personal Zalo sessions).
 
 ## Scripts
 
-| Script | Mô tả |
-|--------|--------|
+| Script | Description |
+|--------|-------------|
 | `npm run dev` | Dev watch |
-| `npm run build` / `start` | Build & chạy `dist/` |
+| `npm run build` / `start` | Build & run `dist/` |
 | `npm test` | Vitest |
-| `npm run zalo:login` | QR login personal |
+| `npm run zalo:login` | Personal QR login |
+
+## License
+
+Private / unlicensed unless you add one.

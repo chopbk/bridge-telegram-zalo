@@ -25,11 +25,12 @@ async function main(): Promise<void> {
     res.json({
       ok: true,
       mode: adapter.mode,
+      zaloBotTransport: env.ZALO_MODE === 'bot' ? env.zaloBotTransport : null,
       uptime: process.uptime(),
     });
   });
 
-  if (botAdapter) {
+  if (botAdapter && env.zaloBotTransport === 'webhook') {
     botAdapter.mountWebhook(app);
   }
 

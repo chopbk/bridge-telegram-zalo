@@ -33,7 +33,7 @@ Một codebase, **2 adapter** luôn có trong code. Runtime chỉ bật 1 mode:
 
 - DB: Node built-in `node:sqlite` (thay `better-sqlite3` — tránh native build trên một số máy)
 - Telegram: grammY polling
-- Zalo Bot: `bot-api.zaloplatforms.com`
+- Zalo Bot: `bot-api.zaloplatforms.com` — local `getUpdates` polling; production webhook
 - Zalo Personal: `zca-js@2.1.2`
 
 ## Nghiệm thu

@@ -19,6 +19,24 @@ describe('normalizeBotUpdate', () => {
     });
   });
 
+  it('parses getUpdates-style message.text.received payload', () => {
+    const msg = normalizeBotUpdate({
+      event_name: 'message.text.received',
+      message: {
+        message_id: '2d758cb5e222177a4e35',
+        text: 'Xin chào',
+        from: { id: '6ede9afa66b88fe6d6a9', display_name: 'Ted' },
+        chat: { id: '6ede9afa66b88fe6d6a9', chat_type: 'PRIVATE' },
+      },
+    });
+    expect(msg).toEqual({
+      zaloUserId: '6ede9afa66b88fe6d6a9',
+      text: 'Xin chào',
+      displayName: 'Ted',
+      messageId: '2d758cb5e222177a4e35',
+    });
+  });
+
   it('parses OA-style user_send_text', () => {
     const msg = normalizeBotUpdate({
       event_name: 'user_send_text',

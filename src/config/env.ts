@@ -13,7 +13,9 @@ const baseSchema = z.object({
   LOG_LEVEL: z.string().default('info'),
   PORT: z.coerce.number().int().positive().default(3080),
   ZALO_BOT_TOKEN: z.string().optional(),
+  ZALO_BOT_TRANSPORT: z.enum(['polling', 'webhook']).optional(),
   ZALO_BOT_WEBHOOK_PATH: z.string().default('/webhooks/zalo'),
+  ZALO_BOT_POLL_TIMEOUT_SEC: z.coerce.number().int().positive().default(30),
   ZALO_SESSION_PATH: z.string().default('./data/zalo-session.json'),
   ZALO_MIN_SEND_INTERVAL_MS: z.coerce.number().int().nonnegative().default(1500),
 });
@@ -22,6 +24,7 @@ export type Env = z.infer<typeof baseSchema> & {
   telegramAdminIds: number[];
   telegramForumGroupId: number;
   telegramChannelId: number;
+  zaloBotTransport: 'polling' | 'webhook';
 };
 
 let cached: Env | null = null;
@@ -56,11 +59,16 @@ export function getEnv(): Env {
     throw new Error('TELEGRAM_FORUM_GROUP_ID and TELEGRAM_CHANNEL_ID must be numbers');
   }
 
+  const zaloBotTransport =
+    data.ZALO_BOT_TRANSPORT ??
+    (process.env.NODE_ENV === 'production' ? 'webhook' : 'polling');
+
   cached = {
     ...data,
     telegramAdminIds: parseAdminIds(data.TELEGRAM_ADMIN_IDS),
     telegramForumGroupId: forumId,
     telegramChannelId: channelId,
+    zaloBotTransport,
   };
   return cached;
 }
