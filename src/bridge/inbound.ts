@@ -114,7 +114,7 @@ async function handleInbound(
     return;
   }
 
-  // --- Chưa có trong DB ---
+  // --- Chưa có trong DB: bỏ qua, không auto-reply ---
   if (!existing) {
     logger.info(
       {
@@ -123,27 +123,9 @@ async function handleInbound(
         unsupportedKind: msg.unsupportedKind,
       },
       isGroup
-        ? 'Inbound from unknown Zalo group — skip (no register hint)'
-        : 'Inbound from unknown Zalo user — skip topic create',
+        ? 'Inbound from unknown Zalo group — skip'
+        : 'Inbound from unknown Zalo user — skip (no auto-reply)',
     );
-    // Chỉ gợi ý đăng ký cho 1-1; tuyệt đối không spam vào group
-    if (
-      !isGroup &&
-      !msg.unsupportedKind &&
-      !msg.images?.length &&
-      text &&
-      !isUnsubscribeIntent(text)
-    ) {
-      try {
-        await adapter.sendText(
-          msg.zaloUserId,
-          'Xin chào! Nhắn "đăng ký" hoặc /register để được xét duyệt nhận tin.',
-          { threadKind: 'user' },
-        );
-      } catch (err) {
-        logger.warn({ err, zaloUserId: msg.zaloUserId }, 'Failed to hint register on Zalo');
-      }
-    }
     return;
   }
 
