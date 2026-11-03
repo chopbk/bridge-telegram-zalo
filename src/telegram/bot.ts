@@ -147,7 +147,7 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
         '/zalofriends [page] — bạn bè trên nick Zalo (lấy id để add)',
         '/zalochats [user|group] [n=200] — chat gần đây (full, tách tin)',
         '/user <zalo_id> — chi tiết 1 khách',
-        '/useradd <zalo_id> [group|user] [tên] — thêm allowlist (group gửi đúng group)',
+        '/useradd <zalo_id> [group|user] [tên] — thêm allowlist (tự lấy tên Zalo nếu bỏ trống)',
         '/useredit <zalo_id> name=.. status=.. kind=group|user muted=0|1 blocked=0|1',
         '/userdel <zalo_id> — xoá khỏi danh sách (+ topic)',
         '/search <query>',
@@ -412,7 +412,7 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
       await ctx.reply(
         [
           'Dùng: /useradd <zalo_id> [group|user] [tên]',
-          '→ thêm allowlist (approved). Group phải ghi kind=group (hoặc để bot tự nhận).',
+          '→ thêm allowlist (approved). Không ghi tên thì bot tự lấy từ Zalo.',
         ].join('\n'),
       );
       return;
@@ -424,9 +424,15 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
       threadKind = nameParts[0] as 'user' | 'group';
       nameParts = nameParts.slice(1);
     }
+    let displayName = nameParts.length ? nameParts.join(' ') : undefined;
 
     try {
-      if (!threadKind && adapter.resolveThreadKind) {
+      // Tự nhận kind + tên từ Zalo nếu admin chưa ghi
+      if (adapter.resolveThreadMeta) {
+        const meta = await adapter.resolveThreadMeta(zaloId);
+        threadKind = threadKind ?? meta.kind;
+        if (!displayName && meta.displayName) displayName = meta.displayName;
+      } else if (!threadKind && adapter.resolveThreadKind) {
         threadKind = await adapter.resolveThreadKind(zaloId);
       }
       threadKind = threadKind ?? 'user';
@@ -435,7 +441,7 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
         ctx.api,
         adapter.mode,
         zaloId,
-        nameParts.length ? nameParts.join(' ') : undefined,
+        displayName,
         threadKind,
       );
       await ctx.reply(
@@ -443,6 +449,7 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
           created
             ? `✅ Đã thêm ${threadKind} mới (approved)`
             : `✅ Đã cập nhật → approved (${customer.threadKind})`,
+          displayName ? `name=${displayName}` : 'name=(không lấy được từ Zalo — có thể sửa /useredit)',
           formatCustomerDetail(customer),
         ].join('\n'),
       );

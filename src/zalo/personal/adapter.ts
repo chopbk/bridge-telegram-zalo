@@ -279,16 +279,52 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
   }
 
   async resolveThreadKind(zaloId: string): Promise<ZaloThreadKind> {
+    const meta = await this.resolveThreadMeta(zaloId);
+    return meta.kind;
+  }
+
+  async resolveThreadMeta(
+    zaloId: string,
+  ): Promise<{ kind: ZaloThreadKind; displayName?: string }> {
+    const api = await getZaloApi();
+    const id = String(zaloId);
+
     try {
-      const api = await getZaloApi();
-      const info = await api.getGroupInfo(zaloId);
-      if (info?.gridInfoMap && info.gridInfoMap[zaloId]) {
-        return 'group';
+      const info = await api.getGroupInfo(id);
+      const map = info?.gridInfoMap ?? {};
+      const g = map[id] ?? Object.entries(map).find(([k]) => String(k) === id)?.[1];
+      if (g) {
+        const name = typeof g.name === 'string' && g.name.trim() ? g.name.trim() : undefined;
+        return { kind: 'group', displayName: name };
       }
     } catch (err) {
-      logger.warn({ err, zaloId }, 'resolveThreadKind getGroupInfo failed — assume user');
+      logger.warn({ err, zaloId: id }, 'resolveThreadMeta getGroupInfo failed — try user');
     }
-    return 'user';
+
+    try {
+      if (typeof api.getUserInfo === 'function') {
+        const users = await api.getUserInfo(id);
+        const profile =
+          users?.changed_profiles?.[id] ??
+          users?.unchanged_profiles?.[id] ??
+          Object.values(users?.changed_profiles ?? {})[0] ??
+          Object.values(users?.unchanged_profiles ?? {})[0];
+        if (profile) {
+          const name =
+            (typeof profile.displayName === 'string' && profile.displayName.trim()
+              ? profile.displayName.trim()
+              : undefined) ||
+            (typeof profile.zaloName === 'string' && profile.zaloName.trim()
+              ? profile.zaloName.trim()
+              : undefined);
+          return { kind: 'user', displayName: name };
+        }
+      }
+    } catch (err) {
+      logger.warn({ err, zaloId: id }, 'resolveThreadMeta getUserInfo failed');
+    }
+
+    return { kind: 'user' };
   }
 
   sendText(userId: string, text: string, opts?: SendTextOptions): Promise<ZaloSendResult> {

@@ -92,4 +92,9 @@ export interface ZaloAdapter {
   ): Promise<ZaloContact[]>;
   /** Personal: đoán id là user hay group. */
   resolveThreadKind?(zaloId: string): Promise<ZaloThreadKind>;
+  /** Personal: kind + tên hiển thị từ Zalo (group name / displayName). */
+  resolveThreadMeta?(zaloId: string): Promise<{
+    kind: ZaloThreadKind;
+    displayName?: string;
+  }>;
 }
