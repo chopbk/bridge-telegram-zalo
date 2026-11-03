@@ -68,6 +68,8 @@ Khách **phải nhắn bot Zalo trước** mới nhận/gửi được.
 
 Chỉ user thuộc `TELEGRAM_ADMIN_IDS`, trong **forum group** hoặc **chat riêng với bot**. Gõ `/help` để xem nhanh.
 
+Lệnh viết liền (không dấu `_`) để tránh Markdown Telegram làm hỏng tin.
+
 ### Danh sách & CRUD người dùng Zalo
 
 | Lệnh | Ý nghĩa |
@@ -77,12 +79,12 @@ Chỉ user thuộc `TELEGRAM_ADMIN_IDS`, trong **forum group** hoặc **chat ri�
 | `/users pending` | Chờ duyệt |
 | `/users ids` | Chỉ in các Zalo ID (dễ copy) |
 | `/users 2` | Trang 2 |
-| `/zalo_friends` | Bạn bè trên nick Zalo (personal) — lấy id rồi `/user_add` |
-| `/zalo_chats` | Chat gần đây (user + group); lọc `/zalo_chats group` |
+| `/zalofriends` | Bạn bè trên nick Zalo (personal) — lấy id rồi `/useradd` |
+| `/zalochats` | Chat gần đây (user + group); lọc `/zalochats group` |
 | `/user <zalo_id>` | Chi tiết 1 khách (hoặc `/user` trong topic) |
-| `/user_add <zalo_id> [tên]` | Thêm vào danh sách cho phép + tạo topic |
-| `/user_edit <zalo_id> name=Tên status=approved muted=0 blocked=0` | Sửa |
-| `/user_del <zalo_id>` | Xoá khỏi DB (+ xoá topic nếu được) |
+| `/useradd <zalo_id> [tên]` | Thêm vào danh sách cho phép + tạo topic |
+| `/useredit <zalo_id> name=Tên status=approved muted=0 blocked=0` | Sửa |
+| `/userdel <zalo_id>` | Xoá khỏi DB (+ xoá topic nếu được) |
 | `/search <query>` | Tìm theo tên / zalo id |
 | `/list [page] [status]` | Alias list cũ |
 
@@ -100,7 +102,7 @@ Chỉ user thuộc `TELEGRAM_ADMIN_IDS`, trong **forum group** hoặc **chat ri�
 |------|---------|
 | `/mode` `/status` | Mode / thống kê |
 | `/recreate` | Tạo lại topic nếu bị xóa |
-| `/retry_broadcast <jobId>` | Gửi lại các item fail của broadcast |
+| `/retrybroadcast <jobId>` | Gửi lại các item fail của broadcast |
 
 Reply text trong topic khách → Zalo **chỉ khi** người gửi là admin và khách `approved`.
 

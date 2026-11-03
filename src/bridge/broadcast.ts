@@ -160,7 +160,7 @@ async function reportBroadcast(result: BroadcastResult): Promise<void> {
   ];
   if (result.fail > 0) {
     lines.push(`fail ids: ${failPreview}${extra}`);
-    lines.push(`Gửi lại: /retry_broadcast ${result.jobId}`);
+    lines.push(`Gửi lại: /retrybroadcast ${result.jobId}`);
   }
   await notifyAdmins(lines.join('\n'));
 }

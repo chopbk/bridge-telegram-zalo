@@ -78,11 +78,11 @@ Only users in `TELEGRAM_ADMIN_IDS`, in the **forum group** or **private chat wit
 | `/users ids` | Zalo IDs only (easy to copy) |
 | `/users 2` | Page 2 |
 | `/user <zalo_id>` | One customer detail (or `/user` inside topic) |
-| `/zalo_friends` | Friends on the Zalo account (personal) |
-| `/zalo_chats` | Recent chats (users + groups); filter with `/zalo_chats group` |
-| `/user_add <zalo_id> [name]` | Add to allowlist + create topic |
-| `/user_edit <zalo_id> name=… status=approved muted=0 blocked=0` | Edit |
-| `/user_del <zalo_id>` | Delete from DB (+ topic best-effort) |
+| `/zalofriends` | Friends on the Zalo account (personal) |
+| `/zalochats` | Recent chats (users + groups); filter with `/zalochats group` |
+| `/useradd <zalo_id> [name]` | Add to allowlist + create topic |
+| `/useredit <zalo_id> name=… status=approved muted=0 blocked=0` | Edit |
+| `/userdel <zalo_id>` | Delete from DB (+ topic best-effort) |
 | `/search <query>` | Search by name / Zalo id |
 | `/list [page] [status]` | Legacy list alias |
 
@@ -100,7 +100,7 @@ Only users in `TELEGRAM_ADMIN_IDS`, in the **forum group** or **private chat wit
 |---------|-------------|
 | `/mode` `/status` | Mode / stats |
 | `/recreate` | Recreate deleted forum topic |
-| `/retry_broadcast <jobId>` | Resend failed broadcast items |
+| `/retrybroadcast <jobId>` | Resend failed broadcast items |
 
 Topic text replies forward to Zalo **only for admins**, and only when the customer is approved.
 

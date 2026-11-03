@@ -63,7 +63,7 @@ function formatCustomerLine(c: Customer, index: number): string {
     .filter(Boolean)
     .join(',');
   const name = c.displayName ?? '(no name)';
-  return `${index}. ${name}\n   zalo=\`${c.zaloUserId}\` topic=${c.telegramTopicId} [${flags}]`;
+  return `${index}. ${name}\n   zalo=${c.zaloUserId} topic=${c.telegramTopicId} [${flags}]`;
 }
 
 function parseBool(raw: string): boolean | null {
@@ -73,21 +73,15 @@ function parseBool(raw: string): boolean | null {
   return null;
 }
 
+/** Plain text — tránh Markdown phá lệnh có dấu _ hoặc id. */
 async function replyChunks(ctx: Context, text: string): Promise<void> {
-  const send = async (chunk: string) => {
-    try {
-      await ctx.reply(chunk, { parse_mode: 'Markdown' });
-    } catch {
-      await ctx.reply(chunk.replace(/`/g, ''));
-    }
-  };
   if (text.length <= 3900) {
-    await send(text);
+    await ctx.reply(text);
     return;
   }
   let rest = text;
   while (rest.length > 0) {
-    await send(rest.slice(0, 3900));
+    await ctx.reply(rest.slice(0, 3900));
     rest = rest.slice(3900);
   }
 }
@@ -104,18 +98,18 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
         '',
         'Quản lý người dùng Zalo:',
         '/users [page] [all|allowed|pending|ids] — đã ghi nhận trong bridge',
-        '/zalo_friends [page] — bạn bè trên nick Zalo (lấy id để add)',
-        '/zalo_chats [page|n] — chat gần đây (user + group)',
+        '/zalofriends [page] — bạn bè trên nick Zalo (lấy id để add)',
+        '/zalochats [page|n] — chat gần đây (user + group)',
         '/user <zalo_id> — chi tiết 1 khách',
-        '/user_add <zalo_id> [tên] — thêm vào danh sách cho phép',
-        '/user_edit <zalo_id> name=.. status=.. muted=0|1 blocked=0|1',
-        '/user_del <zalo_id> — xoá khỏi danh sách (+ topic)',
+        '/useradd <zalo_id> [tên] — thêm vào danh sách cho phép',
+        '/useredit <zalo_id> name=.. status=.. muted=0|1 blocked=0|1',
+        '/userdel <zalo_id> — xoá khỏi danh sách (+ topic)',
         '/search <query>',
         '',
         'Trong topic hoặc kèm zalo_id:',
         '/approve [/reject /block /unblock /mute /unmute] [zalo_id]',
         '',
-        'Khác: /status /mode /list /recreate /retry_broadcast <jobId>',
+        'Khác: /status /mode /list /recreate /retrybroadcast <jobId>',
       ].join('\n'),
     );
   });
@@ -182,7 +176,7 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
     if (result.total === 0) {
       await ctx.reply(
         mode === 'allowed'
-          ? 'Chưa có ai trong danh sách cho phép (approved).\nThêm: /user_add <zalo_id> hoặc /zalo_friends rồi add.'
+          ? 'Chưa có ai trong danh sách cho phép (approved).\nThêm: /useradd <zalo_id> hoặc /zalofriends rồi add.'
           : emptyUsersHint(adapter.mode),
       );
       return;
@@ -223,9 +217,9 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
 
   /**
    * Danh sách bạn bè trên nick Zalo (API), không phải bridge DB.
-   * Dùng để lấy zalo_id rồi /user_add.
+   * Dùng để lấy zalo_id rồi /useradd.
    */
-  bot.command('zalo_friends', async (ctx) => {
+  bot.command(['zalofriends', 'zalo_friends'], async (ctx) => {
     if (!(await requireAdmin(ctx))) return;
     if (!adapter.listContacts) {
       await ctx.reply('Lệnh này chỉ có ở ZALO_MODE=personal.');
@@ -247,15 +241,15 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
       const slice = contacts.slice(start, start + pageSize);
       const lines = [
         `Bạn bè Zalo — trang ${page}/${totalPages} (${contacts.length})`,
-        'Thêm vào bridge: /user_add <zalo_id> [tên]',
+        'Thêm vào bridge: /useradd <zalo_id> [tên]',
         ...slice.map(
           (c, i) =>
-            `${start + i + 1}. ${c.displayName}\n   zalo=\`${c.zaloUserId}\`${c.zaloName ? ` (@${c.zaloName})` : ''}`,
+            `${start + i + 1}. ${c.displayName}\n   zalo=${c.zaloUserId}${c.zaloName ? ` (@${c.zaloName})` : ''}`,
         ),
       ];
       await replyChunks(ctx, lines.join('\n'));
     } catch (err) {
-      logger.error({ err }, 'zalo_friends failed');
+      logger.error({ err }, 'zalofriends failed');
       await ctx.reply('Lấy bạn bè Zalo thất bại. Kiểm tra session / log.');
     }
   });
@@ -263,7 +257,7 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
   /**
    * Chat gần đây với nick Zalo (1-1 + group).
    */
-  bot.command('zalo_chats', async (ctx) => {
+  bot.command(['zalochats', 'zalo_chats'], async (ctx) => {
     if (!(await requireAdmin(ctx))) return;
     if (!adapter.listRecentChats) {
       await ctx.reply('Lệnh này chỉ có ở ZALO_MODE=personal.');
@@ -303,7 +297,7 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
 
       if (chats.length === 0) {
         await ctx.reply(
-          'Không có chat gần đây.\nThử /zalo_friends hoặc `/zalo_chats group`.',
+          'Không có chat gần đây.\nThử /zalofriends hoặc /zalochats group.',
         );
         return;
       }
@@ -316,7 +310,7 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
       const groupCount = chats.filter((c) => c.kind === 'group').length;
       const lines = [
         `Chat gần đây — trang ${safePage}/${totalPages} (${chats.length}: ${userCount} user, ${groupCount} group)`,
-        'User → /user_add <zalo_id> [tên] · lọc: /zalo_chats user | /zalo_chats group',
+        'User → /useradd <zalo_id> [tên] · lọc: /zalochats user | /zalochats group',
         ...slice.map((c, i) => {
           const kind = c.kind === 'group' ? 'group' : 'user';
           const extra =
@@ -324,12 +318,12 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
           const when = c.lastActiveAt
             ? new Date(c.lastActiveAt).toLocaleString('vi-VN', { hour12: false })
             : '?';
-          return `${start + i + 1}. [${kind}] ${c.displayName}\n   id=\`${c.zaloUserId}\`${extra} · ${when}`;
+          return `${start + i + 1}. [${kind}] ${c.displayName}\n   id=${c.zaloUserId}${extra} · ${when}`;
         }),
       ];
       await replyChunks(ctx, lines.join('\n'));
     } catch (err) {
-      logger.error({ err }, 'zalo_chats failed');
+      logger.error({ err }, 'zalochats failed');
       await ctx.reply('Lấy chat gần đây thất bại. Kiểm tra session / log.');
     }
   });
@@ -359,13 +353,13 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
     await ctx.reply(formatCustomerDetail(c));
   });
 
-  bot.command('user_add', async (ctx) => {
+  bot.command(['useradd', 'user_add'], async (ctx) => {
     if (!(await requireAdmin(ctx))) return;
     const raw = ctx.match?.toString().trim() ?? '';
     const [zaloId, ...nameParts] = raw.split(/\s+/).filter(Boolean);
     if (!zaloId) {
       await ctx.reply(
-        'Dùng: /user_add <zalo_id> [tên hiển thị]\n→ thêm vào danh sách cho phép (approved)',
+        'Dùng: /useradd <zalo_id> [tên hiển thị]\n→ thêm vào danh sách cho phép (approved)',
       );
       return;
     }
@@ -383,19 +377,19 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
         ].join('\n'),
       );
     } catch (err) {
-      logger.error({ err, zaloId }, 'user_add failed');
+      logger.error({ err, zaloId }, 'useradd failed');
       await ctx.reply('Thêm thất bại. Xem log.');
     }
   });
 
-  bot.command('user_edit', async (ctx) => {
+  bot.command(['useredit', 'user_edit'], async (ctx) => {
     if (!(await requireAdmin(ctx))) return;
     const raw = ctx.match?.toString().trim() ?? '';
     const tokens = raw.split(/\s+/).filter(Boolean);
     if (tokens.length < 2) {
       await ctx.reply(
         [
-          'Dùng: /user_edit <zalo_id> name=Tên status=approved muted=0 blocked=0',
+          'Dùng: /useredit <zalo_id> name=Tên status=approved muted=0 blocked=0',
           'status: pending|approved|rejected|unsubscribed',
         ].join('\n'),
       );
@@ -458,11 +452,11 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
     await ctx.reply(['✅ Đã sửa', formatCustomerDetail(updated)].join('\n'));
   });
 
-  bot.command('user_del', async (ctx) => {
+  bot.command(['userdel', 'user_del'], async (ctx) => {
     if (!(await requireAdmin(ctx))) return;
     const zaloId = ctx.match?.toString().trim().split(/\s+/)[0] ?? '';
     if (!zaloId) {
-      await ctx.reply('Dùng: /user_del <zalo_id>\nXoá khỏi DB và cố gắng xoá topic Telegram.');
+      await ctx.reply('Dùng: /userdel <zalo_id>\nXoá khỏi DB và cố gắng xoá topic Telegram.');
       return;
     }
     try {
@@ -475,7 +469,7 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
         `🗑 Đã xoá ${removed.displayName ?? removed.zaloUserId} (zalo=${removed.zaloUserId})`,
       );
     } catch (err) {
-      logger.error({ err, zaloId }, 'user_del failed');
+      logger.error({ err, zaloId }, 'userdel failed');
       await ctx.reply('Xoá thất bại. Xem log.');
     }
   });
@@ -656,12 +650,12 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
     }
   });
 
-  bot.command('retry_broadcast', async (ctx) => {
+  bot.command(['retrybroadcast', 'retry_broadcast'], async (ctx) => {
     if (!(await requireAdmin(ctx))) return;
     const idRaw = ctx.match?.toString().trim() ?? '';
     const jobId = Number(idRaw);
     if (!Number.isFinite(jobId) || jobId <= 0) {
-      await ctx.reply('Dùng: /retry_broadcast <jobId>');
+      await ctx.reply('Dùng: /retrybroadcast <jobId>');
       return;
     }
     try {
@@ -675,7 +669,7 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
           (result.fail > 0 ? `\nfail ids: ${result.failedUserIds.slice(0, 10).join(', ')}` : ''),
       );
     } catch (err) {
-      logger.error({ err, jobId }, 'retry_broadcast failed');
+      logger.error({ err, jobId }, 'retrybroadcast failed');
       await ctx.reply('Retry thất bại. Xem log.');
     }
   });
@@ -734,11 +728,11 @@ function emptyUsersHint(mode: string): string {
     'Lưu ý: /users ≠ lịch sử chat Zalo cũ.',
     'Chỉ ghi nhận khi:',
     '• Có người nhắn nick Zalo trong lúc bridge đang chạy, hoặc',
-    '• Admin /user_add <zalo_id>',
+    '• Admin /useradd <zalo_id>',
     '',
     mode === 'personal'
-      ? 'Xem bạn bè Zalo hiện tại: /zalo_friends'
-      : 'Thêm thủ công: /user_add <zalo_id>',
+      ? 'Xem bạn bè Zalo hiện tại: /zalofriends'
+      : 'Thêm thủ công: /useradd <zalo_id>',
   ].join('\n');
 }
 
