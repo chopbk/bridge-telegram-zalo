@@ -1,8 +1,21 @@
 import { mkdir, readFile, rename, writeFile, chmod } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import { imageSize } from 'image-size';
 import { Zalo, type API, type Credentials } from 'zca-js';
 import { getEnv } from '../../config/env.js';
 import logger from '../../config/logger.js';
+
+async function imageMetadataGetter(filePath: string) {
+  try {
+    const data = await readFile(filePath);
+    const dim = imageSize(data);
+    if (!dim.width || !dim.height) return null;
+    return { width: dim.width, height: dim.height, size: data.length };
+  } catch (err) {
+    logger.warn({ err, filePath }, 'imageMetadataGetter failed');
+    return null;
+  }
+}
 
 export type ZaloSessionFile = {
   cookie: Credentials['cookie'];
@@ -57,7 +70,7 @@ export async function getZaloApi(): Promise<API> {
 
   loginPromise = (async () => {
     const session = await loadSession();
-    const zalo = new Zalo();
+    const zalo = new Zalo({ imageMetadataGetter });
     const api = await zalo.login({
       cookie: session.cookie,
       imei: session.imei,

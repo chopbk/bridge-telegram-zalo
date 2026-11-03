@@ -19,7 +19,7 @@ Một codebase, **2 adapter** luôn có trong code. Runtime chỉ bật 1 mode:
 
 ## MVP scope
 
-- Text only; media/file/voice → báo vào topic Telegram (`[Chưa hỗ trợ]`)
+- Text + ảnh 2 chiều (1 ảnh / album nhiều ảnh); file/voice/khác → báo topic (`[Chưa hỗ trợ]`)
 - Mapping SQLite bền (`node:sqlite`), keyed theo `(provider, zalo_user_id)`
 - Đăng ký: `pending` / `approved` / `rejected` / `unsubscribed`; mute admin ≠ hủy đăng ký
 - Anti-loop (bỏ qua tin bot Telegram tự gửi)
@@ -30,7 +30,7 @@ Một codebase, **2 adapter** luôn có trong code. Runtime chỉ bật 1 mode:
 
 ## Out of scope
 
-- 2 mode song song, media 2 chiều đầy đủ, dashboard, multi-nick, CRM
+- 2 mode song song, video/file/voice 2 chiều, dashboard, multi-nick, CRM
 
 ## Stack ghi chú
 
@@ -41,7 +41,7 @@ Một codebase, **2 adapter** luôn có trong code. Runtime chỉ bật 1 mode:
 
 ## Nghiệm thu
 
-- [x] `ZALO_MODE=personal`: luồng A/B/C text (sau QR login; kiểm chứng tay với ≥2 khách)
+- [x] `ZALO_MODE=personal`: luồng A/B/C text + ảnh (sau QR login; kiểm chứng tay với ≥2 khách)
 - [ ] `ZALO_MODE=bot`: A/B/C text OK (adapter sẵn; chưa là gate MVP)
 - [x] Chỉ 1 adapter start; thiếu credential / admin IDs → fail-fast
 - [x] Mapping sống sau restart; scoped theo provider

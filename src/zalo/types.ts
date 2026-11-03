@@ -1,12 +1,19 @@
 export type ZaloMode = 'bot' | 'personal';
 
+export type InboundImage = {
+  /** Direct download URL (Zalo CDN) */
+  url: string;
+};
+
 export type NormalizedInbound = {
   zaloUserId: string;
-  /** Empty when unsupportedKind is set */
+  /** Empty when only images / unsupported */
   text: string;
   displayName?: string;
   messageId?: string;
-  /** Non-text inbound (image, file, voice, …) */
+  /** Photo(s) from Zalo — prefer over unsupportedKind */
+  images?: InboundImage[];
+  /** Non-text inbound (file, voice, …) when images not extracted */
   unsupportedKind?: string;
 };
 
@@ -30,11 +37,32 @@ export type SendTextOptions = {
   threadKind?: ZaloThreadKind;
 };
 
+/** Buffer attachment ready for zca-js sendMessage */
+export type ZaloImageAttachment = {
+  data: Buffer;
+  filename: `${string}.${string}`;
+  metadata: {
+    totalSize: number;
+    width: number;
+    height: number;
+  };
+};
+
+export type SendImagesOptions = SendTextOptions & {
+  caption?: string;
+};
+
 export interface ZaloAdapter {
   readonly mode: ZaloMode;
   start(): Promise<void>;
   stop(): Promise<void>;
   sendText(userId: string, text: string, opts?: SendTextOptions): Promise<ZaloSendResult>;
+  /** Gửi 1 hoặc nhiều ảnh (personal: attachments; bot: lần lượt nếu API hỗ trợ) */
+  sendImages?(
+    userId: string,
+    images: ZaloImageAttachment[],
+    opts?: SendImagesOptions,
+  ): Promise<ZaloSendResult>;
   onInbound(handler: (msg: NormalizedInbound) => void | Promise<void>): void;
   /** Personal: danh sách bạn bè Zalo. Bot: có thể không hỗ trợ. */
   listContacts?(): Promise<ZaloContact[]>;

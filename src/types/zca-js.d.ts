@@ -19,6 +19,41 @@ declare module 'zca-js' {
     language?: string;
   };
 
+  export type AttachmentSource =
+    | string
+    | {
+        data: Buffer;
+        filename: `${string}.${string}`;
+        metadata: {
+          totalSize: number;
+          width?: number;
+          height?: number;
+        };
+      };
+
+  export type MessageContent = {
+    msg: string;
+    attachments?: AttachmentSource | AttachmentSource[];
+    ttl?: number;
+  };
+
+  export type ImageMetadataGetterResponse = {
+    width: number;
+    height: number;
+    size: number;
+  } | null;
+
+  export type ImageMetadataGetter = (
+    filePath: string,
+  ) => Promise<ImageMetadataGetterResponse>;
+
+  export type ZaloOptions = {
+    selfListen?: boolean;
+    checkUpdate?: boolean;
+    logging?: boolean;
+    imageMetadataGetter?: ImageMetadataGetter;
+  };
+
   export type ZaloFriend = {
     userId: string;
     username?: string;
@@ -27,12 +62,17 @@ declare module 'zca-js' {
     lastActionTime?: number;
   };
 
+  export type SendMessageResult = {
+    message?: { msgId?: string | number } | null;
+    attachment?: Array<{ msgId?: string | number }>;
+  };
+
   export type API = {
     sendMessage: (
-      message: string | { msg: string },
+      message: string | MessageContent,
       threadId: string,
       type?: ThreadType,
-    ) => Promise<{ message?: { msgId?: string | number } }>;
+    ) => Promise<SendMessageResult>;
     getAllFriends: (count?: number, page?: number) => Promise<ZaloFriend[]>;
     getAllGroups: () => Promise<{ gridVerMap?: Record<string, string> }>;
     getGroupInfo: (groupId: string | string[]) => Promise<{
@@ -68,11 +108,13 @@ declare module 'zca-js' {
     data: {
       content?: unknown;
       msgId?: string | number;
+      msgType?: string;
       dName?: string;
     };
   };
 
   export class Zalo {
+    constructor(options?: ZaloOptions);
     login(credentials: Credentials): Promise<API>;
     loginQR(
       options: Record<string, unknown>,

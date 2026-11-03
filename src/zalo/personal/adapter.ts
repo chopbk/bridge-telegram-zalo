@@ -6,12 +6,15 @@ import { notifyAdmins } from '../../telegram/notify.js';
 import { getZaloApi, resetZaloClient } from './session.js';
 import type {
   NormalizedInbound,
+  SendImagesOptions,
   SendTextOptions,
   ZaloAdapter,
   ZaloContact,
+  ZaloImageAttachment,
   ZaloSendResult,
   ZaloThreadKind,
 } from '../types.js';
+import { captionFromPhotoContent, extractInboundImages } from './photo.js';
 
 type InboundHandler = (msg: NormalizedInbound) => void | Promise<void>;
 
@@ -63,7 +66,8 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
 
   private async handleMessage(message: ZaloListenerMessage): Promise<void> {
     if (message.isSelf) return;
-    if (message.type !== ThreadType.User) return;
+    // User + Group (group chỉ forward nếu đã có trong DB — inbound lọc)
+    if (message.type !== ThreadType.User && message.type !== ThreadType.Group) return;
     if (!this.handler) return;
 
     const content = message.data.content;
@@ -71,6 +75,8 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
       typeof message.data.dName === 'string' ? message.data.dName : undefined;
     const messageId =
       message.data.msgId != null ? String(message.data.msgId) : undefined;
+    const msgType =
+      typeof message.data.msgType === 'string' ? message.data.msgType : undefined;
     const zaloUserId = String(message.threadId);
 
     if (typeof content === 'string' && content.trim()) {
@@ -83,8 +89,20 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
       return;
     }
 
+    const images = extractInboundImages(content, msgType);
+    if (images && images.length > 0) {
+      await this.handler({
+        zaloUserId,
+        text: captionFromPhotoContent(content),
+        displayName,
+        messageId,
+        images,
+      });
+      return;
+    }
+
     // Non-text: still surface to Telegram
-    const kind = describeUnsupportedContent(content);
+    const kind = describeUnsupportedContent(content, msgType);
     await this.handler({
       zaloUserId,
       text: '',
@@ -230,9 +248,63 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
       }
     });
   }
+
+  sendImages(
+    userId: string,
+    images: ZaloImageAttachment[],
+    opts?: SendImagesOptions,
+  ): Promise<ZaloSendResult> {
+    if (!images.length) {
+      return Promise.reject(new Error('sendImages: empty images'));
+    }
+    const threadKind = opts?.threadKind ?? 'user';
+    const threadType = threadKind === 'group' ? ThreadType.Group : ThreadType.User;
+    const caption = (opts?.caption ?? '').trim();
+    return this.queue.enqueue(async () => {
+      try {
+        const api = await getZaloApi();
+        const result = await api.sendMessage(
+          {
+            msg: caption,
+            attachments: images.map((img) => ({
+              data: img.data,
+              filename: img.filename,
+              metadata: {
+                totalSize: img.metadata.totalSize,
+                width: img.metadata.width,
+                height: img.metadata.height,
+              },
+            })),
+          },
+          userId,
+          threadType,
+        );
+        const messageId =
+          result.message?.msgId ??
+          result.attachment?.[0]?.msgId ??
+          'ok';
+        logger.info(
+          { userId, threadKind, count: images.length, messageId },
+          'Personal Zalo sendImages ok',
+        );
+        return {
+          messageId: messageId !== undefined && messageId !== null ? String(messageId) : 'ok',
+        };
+      } catch (err) {
+        resetZaloClient();
+        logger.error({ err, userId, threadKind, count: images.length }, 'Personal Zalo sendImages failed');
+        const message = err instanceof Error ? err.message : String(err);
+        void notifyAdmins(
+          `Zalo personal sendImages failed for ${userId} (${threadKind}): ${message}`,
+        );
+        throw err;
+      }
+    });
+  }
 }
 
-function describeUnsupportedContent(content: unknown): string {
+function describeUnsupportedContent(content: unknown, msgType?: string): string {
+  if (msgType && msgType !== 'webchat') return msgType.replace(/^chat\./, '') || msgType;
   if (content == null) return 'empty';
   if (typeof content === 'object') {
     const obj = content as Record<string, unknown>;

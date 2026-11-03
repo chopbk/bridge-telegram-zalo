@@ -16,7 +16,8 @@ import {
   setStatusByTopic,
   setStatusByZaloId,
 } from '../bridge/mapper.js';
-import { forwardTopicToZalo } from '../bridge/outbound.js';
+import { forwardTopicImagesToZalo, forwardTopicToZalo } from '../bridge/outbound.js';
+import { bufferToZaloImage, downloadToBuffer, telegramFileUrl } from '../bridge/media.js';
 import { broadcastChannelText, retryBroadcast } from '../bridge/broadcast.js';
 import {
   countByStatus,
@@ -24,7 +25,17 @@ import {
   type Customer,
 } from '../db/customers.js';
 import type { SubscriptionStatus } from '../db/client.js';
-import type { ZaloAdapter } from '../zalo/types.js';
+import type { ZaloAdapter, ZaloImageAttachment } from '../zalo/types.js';
+
+/** Gom album Telegram (media_group_id) trước khi gửi Zalo */
+type PendingAlbum = {
+  topicId: number;
+  caption?: string;
+  fileIds: string[];
+  timer?: ReturnType<typeof setTimeout>;
+};
+const pendingAlbums = new Map<string, PendingAlbum>();
+const ALBUM_FLUSH_MS = 900;
 
 const STATUSES = new Set<SubscriptionStatus>([
   'pending',
@@ -138,6 +149,7 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
       ].join('\n'),
     );
   });
+
 
   /** Danh sách người dùng Zalo đã chat — dễ copy zalo id */
   bot.command('users', async (ctx) => {
@@ -727,6 +739,54 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
     }
   });
 
+  bot.on('message:photo', async (ctx) => {
+    const msg = ctx.message;
+    if (!msg?.photo?.length) return;
+    if (msg.chat.id !== env.telegramForumGroupId) return;
+    if (ctx.from?.is_bot) return;
+    if (ctx.from?.id === ctx.me.id) return;
+
+    const topicId = msg.message_thread_id;
+    if (!topicId) return;
+
+    if (!isAdmin(ctx)) {
+      logger.info({ from: ctx.from?.id, topicId }, 'Non-admin photo in topic ignored');
+      return;
+    }
+
+    const largest = msg.photo[msg.photo.length - 1]!;
+    const caption = typeof msg.caption === 'string' ? msg.caption : undefined;
+    const groupId = msg.media_group_id;
+
+    if (!groupId) {
+      try {
+        const images = await downloadTelegramPhotos(ctx.api, env.TELEGRAM_BOT_TOKEN, [
+          largest.file_id,
+        ]);
+        await forwardTopicImagesToZalo(adapter, topicId, images, caption);
+      } catch (err) {
+        logger.error({ err, topicId }, 'Topic photo→Zalo failed');
+        const detail = err instanceof Error ? err.message : 'Gửi ảnh Zalo thất bại.';
+        await ctx.reply(detail).catch(() => undefined);
+      }
+      return;
+    }
+
+    // Album: gom theo media_group_id rồi flush
+    const key = `${topicId}:${groupId}`;
+    let pending = pendingAlbums.get(key);
+    if (!pending) {
+      pending = { topicId, caption, fileIds: [] };
+      pendingAlbums.set(key, pending);
+    }
+    if (caption && !pending.caption) pending.caption = caption;
+    pending.fileIds.push(largest.file_id);
+    if (pending.timer) clearTimeout(pending.timer);
+    pending.timer = setTimeout(() => {
+      void flushAlbum(key, adapter, ctx, env.TELEGRAM_BOT_TOKEN);
+    }, ALBUM_FLUSH_MS);
+  });
+
   bot.on('channel_post:text', async (ctx) => {
     const post = ctx.channelPost;
     if (!post || !('text' in post) || !post.text) return;
@@ -762,6 +822,47 @@ function emptyUsersHint(mode: string): string {
       ? 'Xem bạn bè Zalo hiện tại: /zalofriends'
       : 'Thêm thủ công: /useradd <zalo_id>',
   ].join('\n');
+}
+
+async function downloadTelegramPhotos(
+  api: Context['api'],
+  botToken: string,
+  fileIds: string[],
+): Promise<ZaloImageAttachment[]> {
+  const out: ZaloImageAttachment[] = [];
+  for (let i = 0; i < fileIds.length; i++) {
+    const file = await api.getFile(fileIds[i]!);
+    if (!file.file_path) {
+      throw new Error(`Telegram getFile thiếu file_path (id=${fileIds[i]})`);
+    }
+    const url = await telegramFileUrl(botToken, file.file_path);
+    const buf = await downloadToBuffer(url);
+    const ext = file.file_path.includes('.')
+      ? file.file_path.split('.').pop() || 'jpg'
+      : 'jpg';
+    out.push(bufferToZaloImage(buf, `tg-photo-${i + 1}.${ext}`));
+  }
+  return out;
+}
+
+async function flushAlbum(
+  key: string,
+  adapter: ZaloAdapter,
+  ctx: Context,
+  botToken: string,
+): Promise<void> {
+  const pending = pendingAlbums.get(key);
+  if (!pending) return;
+  pendingAlbums.delete(key);
+
+  try {
+    const images = await downloadTelegramPhotos(ctx.api, botToken, pending.fileIds);
+    await forwardTopicImagesToZalo(adapter, pending.topicId, images, pending.caption);
+  } catch (err) {
+    logger.error({ err, topicId: pending.topicId, key }, 'Album photo→Zalo failed');
+    const detail = err instanceof Error ? err.message : 'Gửi album ảnh Zalo thất bại.';
+    await ctx.reply(detail).catch(() => undefined);
+  }
 }
 
 export async function startTelegramBot(bot: Bot): Promise<void> {

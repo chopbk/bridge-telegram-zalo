@@ -1,4 +1,4 @@
-import type { Api } from 'grammy';
+import { InputFile, type Api } from 'grammy';
 import { getEnv } from '../config/env.js';
 import logger from '../config/logger.js';
 import {
@@ -9,6 +9,7 @@ import {
 import { claimProcessedMessage } from '../db/processed.js';
 import type { NormalizedInbound, ZaloAdapter } from '../zalo/types.js';
 import { getOrCreateTopic, markTopicMissing } from './mapper.js';
+import { downloadToBuffer } from './media.js';
 import { isRegisterIntent, isUnsubscribeIntent } from './registration.js';
 
 /**
@@ -50,7 +51,7 @@ async function handleInbound(
   const text = (msg.text ?? '').trim();
 
   // --- Đăng ký: mới được tạo topic ---
-  if (!msg.unsupportedKind && text && isRegisterIntent(text)) {
+  if (!msg.unsupportedKind && !msg.images?.length && text && isRegisterIntent(text)) {
     const customer = await getOrCreateTopic(
       api,
       msg.zaloUserId,
@@ -103,7 +104,7 @@ async function handleInbound(
       { zaloUserId: msg.zaloUserId, unsupportedKind: msg.unsupportedKind },
       'Inbound from unknown Zalo user — skip topic create',
     );
-    if (!msg.unsupportedKind && text && !isUnsubscribeIntent(text)) {
+    if (!msg.unsupportedKind && !msg.images?.length && text && !isUnsubscribeIntent(text)) {
       try {
         await adapter.sendText(
           msg.zaloUserId,
@@ -123,6 +124,18 @@ async function handleInbound(
     adapter.mode,
     msg.displayName,
   );
+
+  if (msg.images && msg.images.length > 0) {
+    const prefix =
+      customer.subscriptionStatus !== 'approved'
+        ? `[${customer.subscriptionStatus}] `
+        : customer.blocked
+          ? `[blocked] `
+          : '';
+    const caption = text ? `${prefix}${text}` : prefix.trim() || undefined;
+    await sendPhotosToTopicSafe(api, customer, msg.images.map((i) => i.url), caption);
+    return;
+  }
 
   if (msg.unsupportedKind) {
     await sendToTopicSafe(
@@ -175,14 +188,64 @@ async function sendToTopicSafe(api: Api, customer: Customer, text: string): Prom
       'Forwarded Zalo → Telegram topic',
     );
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    if (/thread not found|message thread not found|TOPIC_DELETED|chat not found/i.test(message)) {
-      markTopicMissing(customer);
-      logger.warn(
-        { zaloUserId: customer.zaloUserId, topicId: customer.telegramTopicId },
-        'Topic missing — marked for recreate',
-      );
-    }
+    handleTopicSendError(err, customer);
     throw err;
+  }
+}
+
+async function sendPhotosToTopicSafe(
+  api: Api,
+  customer: Customer,
+  urls: string[],
+  caption?: string,
+): Promise<void> {
+  const env = getEnv();
+  const chatId = env.telegramForumGroupId;
+  const threadId = customer.telegramTopicId;
+
+  try {
+    const buffers: Buffer[] = [];
+    for (const url of urls) {
+      buffers.push(await downloadToBuffer(url));
+    }
+
+    if (buffers.length === 1) {
+      await api.sendPhoto(chatId, new InputFile(buffers[0]!, 'zalo-photo.jpg'), {
+        message_thread_id: threadId,
+        caption: caption || undefined,
+      });
+    } else {
+      const media = buffers.map((buf, i) => ({
+        type: 'photo' as const,
+        media: new InputFile(buf, `zalo-photo-${i + 1}.jpg`),
+        ...(i === 0 && caption ? { caption } : {}),
+      }));
+      await api.sendMediaGroup(chatId, media, {
+        message_thread_id: threadId,
+      });
+    }
+
+    logger.info(
+      {
+        zaloUserId: customer.zaloUserId,
+        topicId: threadId,
+        photoCount: buffers.length,
+      },
+      'Forwarded Zalo photo(s) → Telegram topic',
+    );
+  } catch (err) {
+    handleTopicSendError(err, customer);
+    throw err;
+  }
+}
+
+function handleTopicSendError(err: unknown, customer: Customer): void {
+  const message = err instanceof Error ? err.message : String(err);
+  if (/thread not found|message thread not found|TOPIC_DELETED|chat not found/i.test(message)) {
+    markTopicMissing(customer);
+    logger.warn(
+      { zaloUserId: customer.zaloUserId, topicId: customer.telegramTopicId },
+      'Topic missing — marked for recreate',
+    );
   }
 }

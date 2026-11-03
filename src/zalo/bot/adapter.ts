@@ -9,8 +9,10 @@ import {
 } from '../../db/inbound-events.js';
 import type {
   NormalizedInbound,
+  SendImagesOptions,
   SendTextOptions,
   ZaloAdapter,
+  ZaloImageAttachment,
   ZaloSendResult,
 } from '../types.js';
 
@@ -195,6 +197,16 @@ export class ZaloBotAdapter implements ZaloAdapter {
         messageId: String(json.result?.message_id ?? 'ok'),
       };
     });
+  }
+
+  sendImages(
+    _userId: string,
+    _images: ZaloImageAttachment[],
+    _opts?: SendImagesOptions,
+  ): Promise<ZaloSendResult> {
+    return Promise.reject(
+      new Error('Gửi ảnh Zalo Bot API chưa được hỗ trợ — dùng ZALO_MODE=personal'),
+    );
   }
 }
 
