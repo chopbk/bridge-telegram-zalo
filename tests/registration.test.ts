@@ -5,6 +5,7 @@ describe('registration intents', () => {
   it('detects register keywords', () => {
     expect(isRegisterIntent('đăng ký')).toBe(true);
     expect(isRegisterIntent('Dang Ky')).toBe(true);
+    expect(isRegisterIntent('/register')).toBe(true);
     expect(isRegisterIntent('/start')).toBe(true);
     expect(isRegisterIntent('xin đăng ký nhận tin')).toBe(true);
     expect(isRegisterIntent('hello')).toBe(false);

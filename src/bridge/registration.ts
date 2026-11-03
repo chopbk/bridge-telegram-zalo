@@ -18,6 +18,7 @@ function stripTones(text: string): string {
 export function isRegisterIntent(text: string): boolean {
   const t = normalize(text);
   const plain = stripTones(t);
+  if (t === '/register' || plain === '/register') return true;
   if (t === '/start' || plain === '/start') return true;
   if (plain === 'dang ky' || plain === 'dangky') return true;
   return plain.includes('dang ky') || t.includes('đăng ký');

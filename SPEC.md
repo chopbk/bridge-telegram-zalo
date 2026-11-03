@@ -6,7 +6,7 @@ Bridge Telegram và Zalo:
 
 | Luồng | Mô tả |
 |-------|--------|
-| A | Khách nhắn Zalo → topic Telegram (mỗi khách 1 topic); đăng ký bằng từ khóa → `pending` → admin duyệt |
+| A | Khách `/register` hoặc "đăng ký" → tạo topic `pending` → admin duyệt; tin thường không tự tạo topic. Admin `/useradd` cũng tạo topic |
 | B | Admin nhắn trong topic → gửi Zalo đúng khách (chỉ khi `approved` và không `blocked`) |
 | C | Post kênh Telegram → broadcast tới khách `approved`, không muted, không blocked |
 

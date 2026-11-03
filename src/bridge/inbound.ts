@@ -2,6 +2,7 @@ import type { Api } from 'grammy';
 import { getEnv } from '../config/env.js';
 import logger from '../config/logger.js';
 import {
+  findByZaloUserId,
   setSubscriptionStatus,
   type Customer,
 } from '../db/customers.js';
@@ -11,7 +12,13 @@ import { getOrCreateTopic, markTopicMissing } from './mapper.js';
 import { isRegisterIntent, isUnsubscribeIntent } from './registration.js';
 
 /**
- * Luồng A: Zalo → Telegram topic (+ đăng ký / hủy đăng ký)
+ * Luồng A: Zalo → Telegram topic
+ *
+ * Topic chỉ được tạo khi:
+ * - Khách nhắn /register hoặc "đăng ký"
+ * - Admin /useradd (không đi qua đây)
+ *
+ * Tin thường từ người chưa có topic → không tạo topic, chỉ gợi ý đăng ký trên Zalo.
  */
 export function wireInbound(api: Api, adapter: ZaloAdapter): void {
   adapter.onInbound(async (msg) => {
@@ -39,45 +46,18 @@ async function handleInbound(
     }
   }
 
-  const customer = await getOrCreateTopic(
-    api,
-    msg.zaloUserId,
-    adapter.mode,
-    msg.displayName,
-  );
+  const existing = findByZaloUserId(msg.zaloUserId, adapter.mode);
+  const text = (msg.text ?? '').trim();
 
-  if (msg.unsupportedKind) {
-    await sendToTopicSafe(
+  // --- Đăng ký: mới được tạo topic ---
+  if (!msg.unsupportedKind && text && isRegisterIntent(text)) {
+    const customer = await getOrCreateTopic(
       api,
-      customer,
-      `[Chưa hỗ trợ] Khách gửi ${msg.unsupportedKind}` +
-        (msg.messageId ? ` (msg ${msg.messageId})` : ''),
+      msg.zaloUserId,
+      adapter.mode,
+      msg.displayName,
     );
-    return;
-  }
 
-  const text = msg.text.trim();
-  if (!text) return;
-
-  if (isUnsubscribeIntent(text)) {
-    setSubscriptionStatus(msg.zaloUserId, adapter.mode, 'unsubscribed');
-    await sendToTopicSafe(
-      api,
-      customer,
-      `⛔ Khách hủy đăng ký: ${customer.displayName ?? customer.zaloUserId}`,
-    );
-    try {
-      await adapter.sendText(
-        msg.zaloUserId,
-        'Bạn đã hủy đăng ký nhận tin. Nhắn "đăng ký" nếu muốn đăng ký lại.',
-      );
-    } catch (err) {
-      logger.warn({ err, zaloUserId: msg.zaloUserId }, 'Failed to ack unsubscribe on Zalo');
-    }
-    return;
-  }
-
-  if (isRegisterIntent(text)) {
     if (customer.subscriptionStatus === 'approved') {
       await sendToTopicSafe(api, customer, `ℹ️ Khách đã approved — nhắc đăng ký lại.`);
       try {
@@ -88,20 +68,13 @@ async function handleInbound(
       return;
     }
 
-    if (
-      customer.subscriptionStatus === 'rejected' ||
-      customer.subscriptionStatus === 'unsubscribed' ||
-      customer.subscriptionStatus === 'pending'
-    ) {
-      // Re-request → pending again (unless blocked)
-      if (!customer.blocked) {
-        setSubscriptionStatus(msg.zaloUserId, adapter.mode, 'pending');
-      }
+    if (!customer.blocked) {
+      setSubscriptionStatus(msg.zaloUserId, adapter.mode, 'pending');
     }
 
     await sendToTopicSafe(
       api,
-      customer,
+      { ...customer, subscriptionStatus: customer.blocked ? customer.subscriptionStatus : 'pending' },
       [
         `📝 Yêu cầu đăng ký từ ${customer.displayName ?? customer.zaloUserId}`,
         `zalo=${customer.zaloUserId}`,
@@ -124,7 +97,63 @@ async function handleInbound(
     return;
   }
 
-  // Normal message — always forward to topic for admin visibility
+  // --- Chưa có topic: không tạo, chỉ gợi ý đăng ký ---
+  if (!existing) {
+    logger.info(
+      { zaloUserId: msg.zaloUserId, unsupportedKind: msg.unsupportedKind },
+      'Inbound from unknown Zalo user — skip topic create',
+    );
+    if (!msg.unsupportedKind && text && !isUnsubscribeIntent(text)) {
+      try {
+        await adapter.sendText(
+          msg.zaloUserId,
+          'Xin chào! Nhắn "đăng ký" hoặc /register để được xét duyệt nhận tin.',
+        );
+      } catch (err) {
+        logger.warn({ err, zaloUserId: msg.zaloUserId }, 'Failed to hint register on Zalo');
+      }
+    }
+    return;
+  }
+
+  // Có thể topic bị xóa → getOrCreateTopic sẽ recreate nếu topic_missing
+  const customer = await getOrCreateTopic(
+    api,
+    msg.zaloUserId,
+    adapter.mode,
+    msg.displayName,
+  );
+
+  if (msg.unsupportedKind) {
+    await sendToTopicSafe(
+      api,
+      customer,
+      `[Chưa hỗ trợ] Khách gửi ${msg.unsupportedKind}` +
+        (msg.messageId ? ` (msg ${msg.messageId})` : ''),
+    );
+    return;
+  }
+
+  if (!text) return;
+
+  if (isUnsubscribeIntent(text)) {
+    setSubscriptionStatus(msg.zaloUserId, adapter.mode, 'unsubscribed');
+    await sendToTopicSafe(
+      api,
+      customer,
+      `⛔ Khách hủy đăng ký: ${customer.displayName ?? customer.zaloUserId}`,
+    );
+    try {
+      await adapter.sendText(
+        msg.zaloUserId,
+        'Bạn đã hủy đăng ký nhận tin. Nhắn "đăng ký" hoặc /register nếu muốn đăng ký lại.',
+      );
+    } catch (err) {
+      logger.warn({ err, zaloUserId: msg.zaloUserId }, 'Failed to ack unsubscribe on Zalo');
+    }
+    return;
+  }
+
   const prefix =
     customer.subscriptionStatus !== 'approved'
       ? `[${customer.subscriptionStatus}] `

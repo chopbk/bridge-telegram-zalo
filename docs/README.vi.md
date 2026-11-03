@@ -56,11 +56,17 @@ Khách **phải nhắn bot Zalo trước** mới nhận/gửi được.
 
 ## Đăng ký khách
 
-1. Khách nhắn Zalo: `đăng ký` / `dang ky` / `/start`
-2. Hệ thống tạo topic (nếu chưa) với trạng thái **pending**, báo admin trong topic
+Topic **không** tự tạo khi khách nhắn lung tung. Chỉ tạo khi:
+
+1. Khách nhắn Zalo: `đăng ký` / `dang ky` / `/register` (hoặc `/start`) → topic **pending**
+2. Hoặc admin `/useradd <zalo_id>` → topic **approved**
+
+Sau đó:
 3. Admin trong topic: `/approve` hoặc `/reject`
 4. Chỉ khách **approved**, không muted, không blocked mới nhận broadcast
-5. Khách hủy: `hủy đăng ký` / `huy dang ky` / `/stop` → `unsubscribed`
+5. Khách hủy: `hủy đăng ký` / `/stop` → `unsubscribed`
+
+Tin thường từ người chưa có trong danh sách → bot Zalo gợi ý đăng ký, **không** mở topic.
 
 **Mute** (`/mute`) chỉ tạm tắt broadcast — khác hủy đăng ký của khách.
 
