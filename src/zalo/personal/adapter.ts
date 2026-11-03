@@ -95,11 +95,47 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
   async listContacts(): Promise<ZaloContact[]> {
     const api = await getZaloApi();
     const friends = await api.getAllFriends();
-    return (friends ?? []).map((f) => ({
-      zaloUserId: String(f.userId),
-      displayName: f.displayName || f.zaloName || f.username || String(f.userId),
-      zaloName: f.zaloName || undefined,
-    }));
+    return (friends ?? []).map((f) => mapFriend(f));
+  }
+
+  /**
+   * Recent 1-1 chats approximated via friends.lastActionTime
+   * (same approach as zca-based CLIs — Zalo has no public "recent chats" API).
+   */
+  async listRecentChats(limit = 30): Promise<ZaloContact[]> {
+    const api = await getZaloApi();
+    const friends = await api.getAllFriends();
+    const capped = Math.max(1, Math.min(limit, 200));
+
+    const byActivity = [...(friends ?? [])]
+      .filter((f) => (f.lastActionTime ?? 0) > 0)
+      .sort((a, b) => (b.lastActionTime ?? 0) - (a.lastActionTime ?? 0))
+      .slice(0, capped)
+      .map((f) => mapFriend(f));
+
+    // Prefer unread 1-1 marks at the top when available
+    try {
+      if (typeof api.getUnreadMark === 'function') {
+        const unread = await api.getUnreadMark();
+        const unreadIds = new Set(
+          (unread?.data?.convsUser ?? [])
+            .map((u) => String(u.fromUid ?? u.id ?? ''))
+            .filter(Boolean),
+        );
+        if (unreadIds.size > 0) {
+          byActivity.sort((a, b) => {
+            const au = unreadIds.has(a.zaloUserId) ? 1 : 0;
+            const bu = unreadIds.has(b.zaloUserId) ? 1 : 0;
+            if (au !== bu) return bu - au;
+            return (b.lastActiveAt ?? 0) - (a.lastActiveAt ?? 0);
+          });
+        }
+      }
+    } catch (err) {
+      logger.warn({ err }, 'getUnreadMark failed — listing by lastActionTime only');
+    }
+
+    return byActivity;
   }
 
   sendText(userId: string, text: string): Promise<ZaloSendResult> {
@@ -131,4 +167,25 @@ function describeUnsupportedContent(content: unknown): string {
     return 'media/object';
   }
   return typeof content;
+}
+
+function normalizeZaloTs(raw: number | undefined): number | undefined {
+  if (raw == null || !Number.isFinite(raw) || raw <= 0) return undefined;
+  // seconds vs ms heuristic
+  return raw < 1e12 ? raw * 1000 : raw;
+}
+
+function mapFriend(f: {
+  userId: string;
+  username?: string;
+  displayName?: string;
+  zaloName?: string;
+  lastActionTime?: number;
+}): ZaloContact {
+  return {
+    zaloUserId: String(f.userId),
+    displayName: f.displayName || f.zaloName || f.username || String(f.userId),
+    zaloName: f.zaloName || undefined,
+    lastActiveAt: normalizeZaloTs(f.lastActionTime),
+  };
 }

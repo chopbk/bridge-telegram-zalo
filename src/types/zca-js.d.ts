@@ -24,6 +24,7 @@ declare module 'zca-js' {
     username?: string;
     displayName?: string;
     zaloName?: string;
+    lastActionTime?: number;
   };
 
   export type API = {
@@ -33,6 +34,16 @@ declare module 'zca-js' {
       type?: ThreadType,
     ) => Promise<{ message?: { msgId?: string | number } }>;
     getAllFriends: (count?: number, page?: number) => Promise<ZaloFriend[]>;
+    getUnreadMark?: () => Promise<{
+      data?: { convsUser?: Array<{ id?: number | string; fromUid?: number | string; ts?: number }> };
+    }>;
+    getPinConversations?: () => Promise<{ conversations?: string[] }>;
+    getUserInfo?: (
+      userId: string | string[],
+    ) => Promise<{
+      unchanged_profiles?: Record<string, { displayName?: string; zaloName?: string }>;
+      changed_profiles?: Record<string, { displayName?: string; zaloName?: string }>;
+    }>;
     listener: {
       on: (event: 'message', handler: (message: ZaloListenerMessage) => void) => void;
       start: () => void;

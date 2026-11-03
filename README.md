@@ -78,6 +78,8 @@ Only inside the **forum group**, and only users in `TELEGRAM_ADMIN_IDS`. Use `/h
 | `/users ids` | Zalo IDs only (easy to copy) |
 | `/users 2` | Page 2 |
 | `/user <zalo_id>` | One customer detail (or `/user` inside topic) |
+| `/zalo_friends` | Friends on the Zalo account (personal) |
+| `/zalo_chats` | Recent 1-1 chats (by Zalo last activity) |
 | `/user_add <zalo_id> [name]` | Add to allowlist + create topic |
 | `/user_edit <zalo_id> name=… status=approved muted=0 blocked=0` | Edit |
 | `/user_del <zalo_id>` | Delete from DB (+ topic best-effort) |

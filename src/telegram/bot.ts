@@ -98,6 +98,7 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
         'Quản lý người dùng Zalo:',
         '/users [page] [all|allowed|pending|ids] — đã ghi nhận trong bridge',
         '/zalo_friends [page] — bạn bè trên nick Zalo (lấy id để add)',
+        '/zalo_chats [page|n] — người chat gần đây (1-1)',
         '/user <zalo_id> — chi tiết 1 khách',
         '/user_add <zalo_id> [tên] — thêm vào danh sách cho phép',
         '/user_edit <zalo_id> name=.. status=.. muted=0|1 blocked=0|1',
@@ -249,6 +250,69 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
     } catch (err) {
       logger.error({ err }, 'zalo_friends failed');
       await ctx.reply('Lấy bạn bè Zalo thất bại. Kiểm tra session / log.');
+    }
+  });
+
+  /**
+   * Người đã chat gần đây với nick Zalo (1-1), theo lastActionTime.
+   */
+  bot.command('zalo_chats', async (ctx) => {
+    if (!(await requireAdminInForum(ctx))) return;
+    if (!adapter.listRecentChats) {
+      await ctx.reply('Lệnh này chỉ có ở ZALO_MODE=personal.');
+      return;
+    }
+
+    const raw = ctx.match?.toString().trim() ?? '';
+    const parts = raw.split(/\s+/).filter(Boolean);
+    let page = 1;
+    let limit = 50;
+    const nums = parts.filter((p) => /^\d+$/.test(p)).map(Number);
+    if (nums.length === 1) {
+      const n = nums[0]!;
+      if (n <= 20) page = n;
+      else limit = Math.min(200, Math.max(1, n));
+    } else if (nums.length >= 2) {
+      page = Math.max(1, nums[0]!);
+      limit = Math.min(200, Math.max(1, nums[1]!));
+    }
+    for (const p of parts) {
+      if (p.startsWith('n=') || p.startsWith('limit=')) {
+        const n = Number(p.split('=')[1]);
+        if (Number.isFinite(n)) limit = Math.min(200, Math.max(1, n));
+      }
+    }
+
+    const pageSize = env.LIST_PAGE_SIZE;
+
+    try {
+      await ctx.reply('Đang lấy danh sách chat gần đây…');
+      const chats = await adapter.listRecentChats(limit);
+      if (chats.length === 0) {
+        await ctx.reply(
+          'Không có chat gần đây (lastActionTime rỗng).\nThử /zalo_friends hoặc nhờ người nhắn Zalo.',
+        );
+        return;
+      }
+
+      const totalPages = Math.max(1, Math.ceil(chats.length / pageSize));
+      const safePage = Math.min(page, totalPages);
+      const start = (safePage - 1) * pageSize;
+      const slice = chats.slice(start, start + pageSize);
+      const lines = [
+        `Chat gần đây (1-1) — trang ${safePage}/${totalPages} (top ${chats.length})`,
+        'Thêm vào bridge: /user_add <zalo_id> [tên]',
+        ...slice.map((c, i) => {
+          const when = c.lastActiveAt
+            ? new Date(c.lastActiveAt).toLocaleString('vi-VN', { hour12: false })
+            : '?';
+          return `${start + i + 1}. ${c.displayName}\n   zalo=\`${c.zaloUserId}\` · ${when}`;
+        }),
+      ];
+      await replyChunks(ctx, lines.join('\n'));
+    } catch (err) {
+      logger.error({ err }, 'zalo_chats failed');
+      await ctx.reply('Lấy chat gần đây thất bại. Kiểm tra session / log.');
     }
   });
 
