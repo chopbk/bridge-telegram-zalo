@@ -1,0 +1,9 @@
+node_modules/
+dist/
+data/*.db
+data/*.db-*
+data/zalo-session.json
+data/zalo-qr.png
+.env
+*.log
+.DS_Store
