@@ -7,7 +7,9 @@ const baseSchema = z.object({
   ZALO_MODE: z.enum(['bot', 'personal']),
   TELEGRAM_BOT_TOKEN: z.string().min(1),
   TELEGRAM_FORUM_GROUP_ID: z.string().min(1),
+  /** Một hoặc nhiều channel id, cách nhau bởi dấu phẩy */
   TELEGRAM_CHANNEL_ID: z.string().min(1),
+  /** Một hoặc nhiều admin user id, cách nhau bởi dấu phẩy */
   TELEGRAM_ADMIN_IDS: z.string().min(1, 'TELEGRAM_ADMIN_IDS is required'),
   DATABASE_PATH: z.string().default('./data/bridge.db'),
   LOG_LEVEL: z.string().default('info'),
@@ -27,19 +29,29 @@ const baseSchema = z.object({
 export type Env = z.infer<typeof baseSchema> & {
   telegramAdminIds: number[];
   telegramForumGroupId: number;
+  /** Tất cả channel được lắng nghe broadcast */
+  telegramChannelIds: number[];
+  /** Channel đầu tiên (tương thích cũ) */
   telegramChannelId: number;
   zaloBotTransport: 'polling' | 'webhook';
 };
 
 let cached: Env | null = null;
 
-function parseAdminIds(raw: string): number[] {
-  return raw
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .map((s) => Number(s))
-    .filter((n) => Number.isFinite(n));
+/** Parse danh sách id số: `1,2, 3` hoặc xuống dòng / `;` */
+export function parseIdList(raw: string): number[] {
+  const seen = new Set<number>();
+  const out: number[] = [];
+  for (const part of raw.split(/[,;\s]+/)) {
+    const s = part.trim();
+    if (!s) continue;
+    const n = Number(s);
+    if (!Number.isFinite(n)) continue;
+    if (seen.has(n)) continue;
+    seen.add(n);
+    out.push(n);
+  }
+  return out;
 }
 
 export function getEnv(): Env {
@@ -52,7 +64,7 @@ export function getEnv(): Env {
   }
 
   const data = parsed.data;
-  const telegramAdminIds = parseAdminIds(data.TELEGRAM_ADMIN_IDS);
+  const telegramAdminIds = parseIdList(data.TELEGRAM_ADMIN_IDS);
   if (telegramAdminIds.length === 0) {
     throw new Error('TELEGRAM_ADMIN_IDS must list at least one numeric Telegram user id');
   }
@@ -71,9 +83,15 @@ export function getEnv(): Env {
   }
 
   const forumId = Number(data.TELEGRAM_FORUM_GROUP_ID);
-  const channelId = Number(data.TELEGRAM_CHANNEL_ID);
-  if (!Number.isFinite(forumId) || !Number.isFinite(channelId)) {
-    throw new Error('TELEGRAM_FORUM_GROUP_ID and TELEGRAM_CHANNEL_ID must be numbers');
+  if (!Number.isFinite(forumId)) {
+    throw new Error('TELEGRAM_FORUM_GROUP_ID must be a number');
+  }
+
+  const telegramChannelIds = parseIdList(data.TELEGRAM_CHANNEL_ID);
+  if (telegramChannelIds.length === 0) {
+    throw new Error(
+      'TELEGRAM_CHANNEL_ID must list at least one numeric channel id (comma-separated OK)',
+    );
   }
 
   const zaloBotTransport =
@@ -84,7 +102,8 @@ export function getEnv(): Env {
     ...data,
     telegramAdminIds,
     telegramForumGroupId: forumId,
-    telegramChannelId: channelId,
+    telegramChannelIds,
+    telegramChannelId: telegramChannelIds[0]!,
     zaloBotTransport,
   };
   return cached;

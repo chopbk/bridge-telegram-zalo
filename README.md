@@ -9,7 +9,8 @@ Bridge **Telegram ↔ Zalo**: one forum topic per customer, topic replies go to 
 
 - Node.js ≥ **22.5** (uses built-in `node:sqlite`; 22/24 LTS recommended)
 - Telegram bot + **Topics-enabled supergroup** + **channel** (bot must be admin)
-- **`TELEGRAM_ADMIN_IDS` required** (comma-separated Telegram user ids)
+- **`TELEGRAM_ADMIN_IDS` required** (comma-separated; nhiều admin OK)
+- **`TELEGRAM_CHANNEL_ID`** — một hoặc nhiều channel id (phẩy)
 - `personal` mode (**MVP first**): secondary Zalo account + `npm run zalo:login`
 - `bot` mode: Zalo Bot token; production webhook needs `ZALO_BOT_WEBHOOK_SECRET`
 

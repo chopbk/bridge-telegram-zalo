@@ -9,7 +9,7 @@ import {
 import { claimProcessedMessage } from '../db/processed.js';
 import type { NormalizedInbound, ZaloAdapter } from '../zalo/types.js';
 import { getOrCreateTopic, markTopicMissing } from './mapper.js';
-import { downloadToBuffer } from './media.js';
+import { downloadZaloMedia } from './media.js';
 import { isRegisterIntent, isUnsubscribeIntent } from './registration.js';
 
 /**
@@ -205,8 +205,27 @@ async function sendPhotosToTopicSafe(
 
   try {
     const buffers: Buffer[] = [];
+    const failedUrls: string[] = [];
     for (const url of urls) {
-      buffers.push(await downloadToBuffer(url));
+      try {
+        buffers.push(await downloadZaloMedia(url));
+      } catch (err) {
+        logger.warn({ err, url: url.slice(0, 100) }, 'Zalo photo download failed');
+        failedUrls.push(url);
+      }
+    }
+
+    if (buffers.length === 0) {
+      await api.sendMessage(
+        chatId,
+        [
+          caption ? `${caption}\n` : '',
+          '[Ảnh] Không tải được file từ Zalo — gửi link:',
+          ...failedUrls.map((u) => u.slice(0, 200)),
+        ].join('\n'),
+        { message_thread_id: threadId },
+      );
+      return;
     }
 
     if (buffers.length === 1) {
@@ -225,11 +244,20 @@ async function sendPhotosToTopicSafe(
       });
     }
 
+    if (failedUrls.length > 0) {
+      await api.sendMessage(
+        chatId,
+        `[Ảnh] ${failedUrls.length} file không tải được`,
+        { message_thread_id: threadId },
+      );
+    }
+
     logger.info(
       {
         zaloUserId: customer.zaloUserId,
         topicId: threadId,
         photoCount: buffers.length,
+        failed: failedUrls.length,
       },
       'Forwarded Zalo photo(s) → Telegram topic',
     );

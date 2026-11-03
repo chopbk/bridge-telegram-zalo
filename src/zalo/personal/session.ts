@@ -59,6 +59,37 @@ export async function loadSession(pathOverride?: string): Promise<ZaloSessionFil
   };
 }
 
+/** Cookie header để tải media CDN Zalo */
+export function cookieHeaderFromSession(session: ZaloSessionFile): string {
+  const c = session.cookie as unknown;
+  if (typeof c === 'string') return c;
+  if (Array.isArray(c)) {
+    return c
+      .map((item) => {
+        if (!item || typeof item !== 'object') return '';
+        const row = item as { key?: string; value?: string; name?: string };
+        const key = row.key ?? row.name;
+        if (!key || row.value == null) return '';
+        return `${key}=${row.value}`;
+      })
+      .filter(Boolean)
+      .join('; ');
+  }
+  return '';
+}
+
+export async function getSessionDownloadHeaders(): Promise<Record<string, string>> {
+  const session = await loadSession();
+  const headers: Record<string, string> = {
+    'User-Agent': session.userAgent || 'Mozilla/5.0',
+    Referer: 'https://chat.zalo.me/',
+    Origin: 'https://chat.zalo.me',
+  };
+  const cookie = cookieHeaderFromSession(session);
+  if (cookie) headers.Cookie = cookie;
+  return headers;
+}
+
 export function resetZaloClient(): void {
   apiSingleton = null;
   loginPromise = null;

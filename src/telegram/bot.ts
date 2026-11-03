@@ -146,7 +146,8 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
         `pending=${byStatus.pending} approved=${byStatus.approved} rejected=${byStatus.rejected} unsubscribed=${byStatus.unsubscribed}`,
         `broadcast targets: ${targets}`,
         `forum: ${env.telegramForumGroupId}`,
-        `channel: ${env.telegramChannelId}`,
+        `channels: ${env.telegramChannelIds.join(',')}`,
+        `admins: ${env.telegramAdminIds.length}`,
         'Chi tiết cấu hình: /config',
       ].join('\n'),
     );
@@ -779,6 +780,7 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
 
     if (!groupId) {
       try {
+        logger.info({ topicId, fileId: largest.file_id }, 'Forwarding topic photo → Zalo');
         const images = await downloadTelegramPhotos(ctx.api, env.TELEGRAM_BOT_TOKEN, [
           largest.file_id,
         ]);
@@ -809,15 +811,15 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
   bot.on('channel_post:text', async (ctx) => {
     const post = ctx.channelPost;
     if (!post || !('text' in post) || !post.text) return;
-    if (post.chat.id !== env.telegramChannelId) return;
+    if (!env.telegramChannelIds.includes(post.chat.id)) return;
 
     try {
       const result = await broadcastChannelText(adapter, post.text, {
         channelMessageId: post.message_id,
       });
-      logger.info({ result }, 'Channel broadcast done');
+      logger.info({ result, channelId: post.chat.id }, 'Channel broadcast done');
     } catch (err) {
-      logger.error({ err }, 'Channel broadcast failed');
+      logger.error({ err, channelId: post.chat.id }, 'Channel broadcast failed');
     }
   });
 

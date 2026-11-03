@@ -2,6 +2,7 @@ import { ThreadType, type ZaloListenerMessage } from 'zca-js';
 import { getEnv } from '../../config/env.js';
 import logger from '../../config/logger.js';
 import { SendQueue } from '../../bridge/queue.js';
+import { safeUnlink, writeTempImage } from '../../bridge/media.js';
 import { touchThreadActivity, getThreadActivityMap } from '../../db/thread-activity.js';
 import { notifyAdmins } from '../../telegram/notify.js';
 import { getZaloApi, resetZaloClient } from './session.js';
@@ -320,31 +321,33 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
     const threadType = threadKind === 'group' ? ThreadType.Group : ThreadType.User;
     const caption = (opts?.caption ?? '').trim();
     return this.queue.enqueue(async () => {
+      // Gửi bằng đường dẫn file tạm — ổn định hơn Buffer với zca-js (cần imageMetadataGetter)
+      const tempPaths: string[] = [];
       try {
+        for (const img of images) {
+          const ext = img.filename.split('.').pop() || 'jpg';
+          tempPaths.push(await writeTempImage(img.data, ext));
+        }
         const api = await getZaloApi();
         const result = await api.sendMessage(
           {
             msg: caption,
-            attachments: images.map((img) => ({
-              data: img.data,
-              filename: img.filename,
-              metadata: {
-                totalSize: img.metadata.totalSize,
-                width: img.metadata.width,
-                height: img.metadata.height,
-              },
-            })),
+            attachments: tempPaths.length === 1 ? tempPaths[0]! : tempPaths,
           },
           userId,
           threadType,
         );
+        const attachments = (result.attachment ?? []).filter(Boolean);
         const messageId =
-          result.message?.msgId ??
-          result.attachment?.[0]?.msgId ??
-          'ok';
+          result.message?.msgId ?? attachments[0]?.msgId ?? null;
+        if (!messageId && attachments.length === 0) {
+          throw new Error(
+            'Zalo trả về attachment rỗng — kiểm tra listener đang chạy và định dạng ảnh (jpg/png/webp)',
+          );
+        }
         touchThreadActivity(this.mode, userId, threadKind, Date.now());
         logger.info(
-          { userId, threadKind, count: images.length, messageId },
+          { userId, threadKind, count: images.length, messageId, attachmentCount: attachments.length },
           'Personal Zalo sendImages ok',
         );
         return {
@@ -358,6 +361,8 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
           `Zalo personal sendImages failed for ${userId} (${threadKind}): ${message}`,
         );
         throw err;
+      } finally {
+        await Promise.all(tempPaths.map((p) => safeUnlink(p)));
       }
     });
   }

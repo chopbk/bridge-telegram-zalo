@@ -9,7 +9,8 @@ Bridge **Telegram ↔ Zalo**: mỗi khách một forum topic, reply topic → Za
 
 - Node.js ≥ **22.5** (dùng built-in `node:sqlite`; khuyến nghị 22/24 LTS)
 - Telegram bot + **supergroup bật Topics** + **channel** (bot là admin)
-- **`TELEGRAM_ADMIN_IDS` bắt buộc** (không để trống)
+- **`TELEGRAM_ADMIN_IDS` bắt buộc** — nhiều admin: `111,222`
+- **`TELEGRAM_CHANNEL_ID`** — nhiều channel: `-1001,-1002`
 - Mode `personal` (**MVP khuyến nghị**): nick Zalo phụ + `npm run zalo:login`
 - Mode `bot`: Zalo Bot token; production webhook cần secret
 

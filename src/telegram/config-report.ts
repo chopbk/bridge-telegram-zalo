@@ -58,8 +58,8 @@ export async function buildConfigReport(
     `bot: @${me.username ?? '—'} id=${me.id}`,
     `ZALO_MODE: ${adapter.mode} (env=${env.ZALO_MODE})`,
     `TELEGRAM_FORUM_GROUP_ID: ${env.telegramForumGroupId}`,
-    `TELEGRAM_CHANNEL_ID: ${env.telegramChannelId}`,
-    `TELEGRAM_ADMIN_IDS: ${env.telegramAdminIds.join(',')}`,
+    `TELEGRAM_CHANNEL_ID: ${env.telegramChannelIds.join(',')} (${env.telegramChannelIds.length})`,
+    `TELEGRAM_ADMIN_IDS: ${env.telegramAdminIds.join(',')} (${env.telegramAdminIds.length})`,
     `TELEGRAM_BOT_TOKEN: ${maskSecret(env.TELEGRAM_BOT_TOKEN, 8, 4)}`,
     `DATABASE_PATH: ${env.DATABASE_PATH}`,
     `LOG_LEVEL: ${env.LOG_LEVEL}`,
@@ -84,7 +84,11 @@ export async function buildConfigReport(
 
   lines.push('', '=== Kiểm tra Telegram ===');
   lines.push(...(await checkChat(api, 'forum', env.telegramForumGroupId, me.id)));
-  lines.push(...(await checkChat(api, 'channel', env.telegramChannelId, me.id)));
+  for (let i = 0; i < env.telegramChannelIds.length; i++) {
+    const label =
+      env.telegramChannelIds.length === 1 ? 'channel' : `channel[${i + 1}]`;
+    lines.push(...(await checkChat(api, label, env.telegramChannelIds[i]!, me.id)));
+  }
 
   return lines.join('\n');
 }
