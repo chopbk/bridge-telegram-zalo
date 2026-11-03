@@ -24,6 +24,7 @@ Một codebase, **2 adapter** luôn có trong code. Runtime chỉ bật 1 mode:
 - Đăng ký: `pending` / `approved` / `rejected` / `unsubscribed`; mute admin ≠ hủy đăng ký
 - Anti-loop (bỏ qua tin bot Telegram tự gửi)
 - Admin bắt buộc (`TELEGRAM_ADMIN_IDS`); lệnh chỉ trong forum group; reply topic chỉ admin
+- Quản lý user: `/users`, `/user_add`, `/user_edit`, `/user_del` (+ approve/reject theo zalo id)
 - Queue tuần tự + `ZALO_MIN_SEND_INTERVAL_MS` + `ZALO_SEND_MAX_PER_MINUTE`
 - Jobs broadcast + retry + dedup `processed_messages`; báo cáo admin sau broadcast
 

@@ -2,6 +2,7 @@ import type { Api } from 'grammy';
 import { getEnv } from '../config/env.js';
 import logger from '../config/logger.js';
 import {
+  deleteCustomer,
   findByTopicId,
   findByZaloUserId,
   listBroadcastTargets,
@@ -10,12 +11,15 @@ import {
   searchCustomers,
   setBlockedByTopic,
   setMutedByTopic,
+  setSubscriptionStatus,
   setSubscriptionStatusByTopic,
   setTopicMissing,
   tryInsertCustomer,
+  updateCustomer,
   updateDisplayName,
   updateTopicId,
   type Customer,
+  type CustomerPatch,
 } from '../db/customers.js';
 import type { SubscriptionStatus } from '../db/client.js';
 import type { ZaloMode } from '../zalo/types.js';
@@ -166,6 +170,77 @@ export function setStatusByTopic(
   status: SubscriptionStatus,
 ): Customer | null {
   return setSubscriptionStatusByTopic(topicId, provider, status);
+}
+
+export function setStatusByZaloId(
+  zaloUserId: string,
+  provider: ZaloMode,
+  status: SubscriptionStatus,
+): Customer | null {
+  return setSubscriptionStatus(zaloUserId, provider, status);
+}
+
+export function customerByZaloId(
+  zaloUserId: string,
+  provider: ZaloMode,
+): Customer | null {
+  return findByZaloUserId(zaloUserId, provider);
+}
+
+/** Admin thêm khách vào danh sách cho phép (approved) + tạo topic. */
+export async function addAllowedCustomer(
+  api: Api,
+  provider: ZaloMode,
+  zaloUserId: string,
+  displayName?: string,
+): Promise<{ customer: Customer; created: boolean }> {
+  const existing = findByZaloUserId(zaloUserId, provider);
+  if (existing) {
+    const updated =
+      updateCustomer(zaloUserId, provider, {
+        subscriptionStatus: 'approved',
+        blocked: false,
+        ...(displayName ? { displayName } : {}),
+      }) ?? existing;
+    return { customer: updated, created: false };
+  }
+
+  const customer = await createTopicAndInsert(
+    api,
+    zaloUserId,
+    provider,
+    displayName,
+    'approved',
+  );
+  return { customer, created: true };
+}
+
+export function editCustomer(
+  zaloUserId: string,
+  provider: ZaloMode,
+  patch: CustomerPatch,
+): Customer | null {
+  return updateCustomer(zaloUserId, provider, patch);
+}
+
+/** Xóa khỏi DB; best-effort xóa forum topic trên Telegram. */
+export async function removeCustomer(
+  api: Api,
+  provider: ZaloMode,
+  zaloUserId: string,
+): Promise<Customer | null> {
+  const existing = deleteCustomer(zaloUserId, provider);
+  if (!existing) return null;
+
+  try {
+    await api.deleteForumTopic(getEnv().telegramForumGroupId, existing.telegramTopicId);
+  } catch (err) {
+    logger.warn(
+      { err, topicId: existing.telegramTopicId, zaloUserId },
+      'Failed to delete forum topic after customer remove',
+    );
+  }
+  return existing;
 }
 
 function truncateTopicTitle(name: string): string {

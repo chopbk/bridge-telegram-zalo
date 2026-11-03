@@ -5,13 +5,16 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { resetEnvCache } from '../src/config/env.js';
 import { closeDb, getDb } from '../src/db/client.js';
 import {
+  deleteCustomer,
   findByTopicId,
+  findByZaloUserId,
   insertCustomer,
   listBroadcastTargets,
   listCustomersPage,
   searchCustomers,
   setMuted,
   setSubscriptionStatus,
+  updateCustomer,
 } from '../src/db/customers.js';
 import { claimProcessedMessage } from '../src/db/processed.js';
 
@@ -128,5 +131,31 @@ describe('customers db', () => {
     expect(claimProcessedMessage('personal', 'm1')).toBe(true);
     expect(claimProcessedMessage('personal', 'm1')).toBe(false);
     expect(claimProcessedMessage('bot', 'm1')).toBe(true);
+  });
+
+  it('updates and deletes customers', () => {
+    insertCustomer({
+      zaloUserId: 'u-del',
+      telegramTopicId: 55,
+      provider: 'personal',
+      displayName: 'Old',
+      subscriptionStatus: 'pending',
+    });
+
+    const updated = updateCustomer('u-del', 'personal', {
+      displayName: 'New Name',
+      subscriptionStatus: 'approved',
+      muted: true,
+      blocked: false,
+    });
+    expect(updated?.displayName).toBe('New Name');
+    expect(updated?.subscriptionStatus).toBe('approved');
+    expect(updated?.muted).toBe(true);
+    expect(listBroadcastTargets('personal')).toHaveLength(0); // muted
+
+    const removed = deleteCustomer('u-del', 'personal');
+    expect(removed?.zaloUserId).toBe('u-del');
+    expect(findByZaloUserId('u-del', 'personal')).toBeNull();
+    expect(deleteCustomer('u-del', 'personal')).toBeNull();
   });
 });

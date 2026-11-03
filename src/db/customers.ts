@@ -333,3 +333,61 @@ export function updateTopicId(
   if (result.changes === 0) return null;
   return findByZaloUserId(zaloUserId, provider);
 }
+
+export function deleteCustomer(zaloUserId: string, provider: ZaloMode): Customer | null {
+  const existing = findByZaloUserId(zaloUserId, provider);
+  if (!existing) return null;
+  getDb()
+    .prepare('DELETE FROM customers WHERE zalo_user_id = ? AND provider = ?')
+    .run(zaloUserId, provider);
+  return existing;
+}
+
+export type CustomerPatch = {
+  displayName?: string | null;
+  subscriptionStatus?: SubscriptionStatus;
+  muted?: boolean;
+  blocked?: boolean;
+};
+
+export function updateCustomer(
+  zaloUserId: string,
+  provider: ZaloMode,
+  patch: CustomerPatch,
+): Customer | null {
+  const existing = findByZaloUserId(zaloUserId, provider);
+  if (!existing) return null;
+
+  const now = new Date().toISOString();
+  const displayName =
+    patch.displayName !== undefined ? patch.displayName : existing.displayName;
+  const status = patch.subscriptionStatus ?? existing.subscriptionStatus;
+  const muted = patch.muted !== undefined ? (patch.muted ? 1 : 0) : existing.muted ? 1 : 0;
+  const blocked =
+    patch.blocked !== undefined ? (patch.blocked ? 1 : 0) : existing.blocked ? 1 : 0;
+
+  getDb()
+    .prepare(
+      `UPDATE customers
+       SET display_name = ?, subscription_status = ?, muted = ?, blocked = ?, updated_at = ?
+       WHERE zalo_user_id = ? AND provider = ?`,
+    )
+    .run(displayName, status, muted, blocked, now, zaloUserId, provider);
+
+  return findByZaloUserId(zaloUserId, provider);
+}
+
+export function formatCustomerDetail(c: Customer): string {
+  return [
+    `name: ${c.displayName ?? '(không có)'}`,
+    `zalo: ${c.zaloUserId}`,
+    `topic: ${c.telegramTopicId}`,
+    `status: ${c.subscriptionStatus}`,
+    `muted: ${c.muted ? 'yes' : 'no'}`,
+    `blocked: ${c.blocked ? 'yes' : 'no'}`,
+    `topic_missing: ${c.topicMissing ? 'yes' : 'no'}`,
+    `provider: ${c.provider}`,
+    `created: ${c.createdAt}`,
+    `updated: ${c.updatedAt}`,
+  ].join('\n');
+}

@@ -66,17 +66,37 @@ Khách **phải nhắn bot Zalo trước** mới nhận/gửi được.
 
 ## Lệnh admin (Telegram)
 
-Chỉ trong **forum group** và user thuộc `TELEGRAM_ADMIN_IDS`:
+Chỉ trong **forum group** và user thuộc `TELEGRAM_ADMIN_IDS`. Gõ `/help` để xem nhanh.
+
+### Danh sách & CRUD người dùng Zalo
 
 | Lệnh | Ý nghĩa |
 |------|---------|
-| `/mode` | Mode Zalo đang chạy |
-| `/status` | Đếm theo status + target broadcast |
-| `/list [page] [status]` | Danh sách phân trang (vd `/list 2 pending`) |
+| `/users` | Danh sách người đã chat (có `zalo=…` để copy) |
+| `/users allowed` | Chỉ danh sách cho phép (approved) |
+| `/users pending` | Chờ duyệt |
+| `/users ids` | Chỉ in các Zalo ID (dễ copy) |
+| `/users 2` | Trang 2 |
+| `/user <zalo_id>` | Chi tiết 1 khách (hoặc `/user` trong topic) |
+| `/user_add <zalo_id> [tên]` | Thêm vào danh sách cho phép + tạo topic |
+| `/user_edit <zalo_id> name=Tên status=approved muted=0 blocked=0` | Sửa |
+| `/user_del <zalo_id>` | Xoá khỏi DB (+ xoá topic nếu được) |
 | `/search <query>` | Tìm theo tên / zalo id |
-| `/approve` `/reject` | Duyệt / từ chối (trong topic khách) |
-| `/block` `/unblock` | Chặn cứng |
-| `/mute` `/unmute` | Tạm tắt/bật broadcast |
+| `/list [page] [status]` | Alias list cũ |
+
+### Duyệt / chặn
+
+| Lệnh | Ý nghĩa |
+|------|---------|
+| `/approve` `/reject` `[zalo_id]` | Duyệt / từ chối (trong topic **hoặc** kèm id) |
+| `/block` `/unblock` `[zalo_id]` | Chặn cứng |
+| `/mute` `/unmute` `[zalo_id]` | Tạm tắt/bật broadcast |
+
+### Hệ thống
+
+| Lệnh | Ý nghĩa |
+|------|---------|
+| `/mode` `/status` | Mode / thống kê |
 | `/recreate` | Tạo lại topic nếu bị xóa |
 | `/retry_broadcast <jobId>` | Gửi lại các item fail của broadcast |
 

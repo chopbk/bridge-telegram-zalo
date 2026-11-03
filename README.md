@@ -66,17 +66,37 @@ Admin `/mute` only pauses broadcast — it is not the same as customer unsubscri
 
 ## Admin commands (Telegram)
 
-Only inside the **forum group**, and only users in `TELEGRAM_ADMIN_IDS`:
+Only inside the **forum group**, and only users in `TELEGRAM_ADMIN_IDS`. Use `/help` for a quick cheat sheet.
+
+### Zalo user list & CRUD
 
 | Command | Description |
 |---------|-------------|
-| `/mode` | Active Zalo mode |
-| `/status` | Counts by subscription status + broadcast targets |
-| `/list [page] [status]` | Paginated list (e.g. `/list 2 pending`) |
+| `/users` | Users who have chatted (shows copyable `zalo=…`) |
+| `/users allowed` | Allowlist only (approved) |
+| `/users pending` | Pending approval |
+| `/users ids` | Zalo IDs only (easy to copy) |
+| `/users 2` | Page 2 |
+| `/user <zalo_id>` | One customer detail (or `/user` inside topic) |
+| `/user_add <zalo_id> [name]` | Add to allowlist + create topic |
+| `/user_edit <zalo_id> name=… status=approved muted=0 blocked=0` | Edit |
+| `/user_del <zalo_id>` | Delete from DB (+ topic best-effort) |
 | `/search <query>` | Search by name / Zalo id |
-| `/approve` `/reject` | Approve / reject (in customer topic) |
-| `/block` `/unblock` | Hard block |
-| `/mute` `/unmute` | Pause / resume broadcast |
+| `/list [page] [status]` | Legacy list alias |
+
+### Approve / block
+
+| Command | Description |
+|---------|-------------|
+| `/approve` `/reject` `[zalo_id]` | In topic **or** with id |
+| `/block` `/unblock` `[zalo_id]` | Hard block |
+| `/mute` `/unmute` `[zalo_id]` | Pause / resume broadcast |
+
+### System
+
+| Command | Description |
+|---------|-------------|
+| `/mode` `/status` | Mode / stats |
 | `/recreate` | Recreate deleted forum topic |
 | `/retry_broadcast <jobId>` | Resend failed broadcast items |
 
