@@ -88,6 +88,12 @@ declare module 'zca-js' {
       };
     }>;
     getPinConversations?: () => Promise<{ conversations?: string[] }>;
+    getGroupChatHistory?: (
+      groupId: string,
+      count?: number,
+    ) => Promise<{
+      groupMsgs?: Array<{ data?: { ts?: string | number }; ts?: string | number }>;
+    }>;
     getUserInfo?: (
       userId: string | string[],
     ) => Promise<{
@@ -110,6 +116,7 @@ declare module 'zca-js' {
       msgId?: string | number;
       msgType?: string;
       dName?: string;
+      ts?: string | number;
     };
   };
 

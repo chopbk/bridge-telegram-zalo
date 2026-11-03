@@ -315,10 +315,15 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
     const pageSize = env.LIST_PAGE_SIZE;
 
     try {
-      await ctx.reply('Đang lấy danh sách chat gần đây (user + group)…');
-      let chats = await adapter.listRecentChats(limit);
-      if (filter === 'user') chats = chats.filter((c) => c.kind !== 'group');
-      if (filter === 'group') chats = chats.filter((c) => c.kind === 'group');
+      const focusLabel =
+        filter === 'group' ? 'group (đang probe tin cuối…)' : filter === 'user' ? 'user' : 'user + group';
+      await ctx.reply(`Đang lấy chat gần đây — ${focusLabel}`);
+      // focus=group: probe history để sort đúng; tránh lấy all rồi filter (mất thứ tự)
+      const chats = await adapter.listRecentChats(limit, {
+        focus: filter,
+        // Chỉ probe history khi lọc group — chính xác hơn, có thể mất vài giây
+        probeGroupHistory: filter === 'group',
+      });
 
       if (chats.length === 0) {
         await ctx.reply(
@@ -335,6 +340,7 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
       const groupCount = chats.filter((c) => c.kind === 'group').length;
       const lines = [
         `Chat gần đây — trang ${safePage}/${totalPages} (${chats.length}: ${userCount} user, ${groupCount} group)`,
+        'Sắp xếp: ghim → hoạt động gần nhất (không dùng ngày tạo group)',
         'User → /useradd <zalo_id> [tên] · lọc: /zalochats user | /zalochats group',
         ...slice.map((c, i) => {
           const kind = c.kind === 'group' ? 'group' : 'user';
@@ -342,7 +348,7 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
             kind === 'group' && c.memberCount != null ? ` · ${c.memberCount} mem` : '';
           const when = c.lastActiveAt
             ? new Date(c.lastActiveAt).toLocaleString('vi-VN', { hour12: false })
-            : '?';
+            : 'chưa rõ';
           return `${start + i + 1}. [${kind}] ${c.displayName}\n   id=${c.zaloUserId}${extra} · ${when}`;
         }),
       ];

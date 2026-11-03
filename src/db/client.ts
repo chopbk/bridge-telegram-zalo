@@ -78,6 +78,16 @@ function migrate(database: DatabaseSync): void {
       .run();
   }
 
+  if (version < 4) {
+    migrateToV4(database);
+    database
+      .prepare(
+        `INSERT INTO schema_meta (key, value) VALUES ('version', '4')
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      )
+      .run();
+  }
+
   database.exec(`
     CREATE TABLE IF NOT EXISTS processed_messages (
       provider TEXT NOT NULL,
@@ -232,6 +242,22 @@ function migrateToV3(database: DatabaseSync): void {
       `ALTER TABLE customers ADD COLUMN thread_kind TEXT NOT NULL DEFAULT 'user'`,
     );
   }
+}
+
+function migrateToV4(database: DatabaseSync): void {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS thread_activity (
+      provider TEXT NOT NULL,
+      thread_id TEXT NOT NULL,
+      thread_kind TEXT NOT NULL CHECK (thread_kind IN ('user', 'group')),
+      last_active_at INTEGER NOT NULL,
+      display_name TEXT,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (provider, thread_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_thread_activity_recent
+      ON thread_activity(provider, thread_kind, last_active_at DESC);
+  `);
 }
 
 export function closeDb(): void {

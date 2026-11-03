@@ -2,9 +2,11 @@ import { ThreadType, type ZaloListenerMessage } from 'zca-js';
 import { getEnv } from '../../config/env.js';
 import logger from '../../config/logger.js';
 import { SendQueue } from '../../bridge/queue.js';
+import { touchThreadActivity, getThreadActivityMap } from '../../db/thread-activity.js';
 import { notifyAdmins } from '../../telegram/notify.js';
 import { getZaloApi, resetZaloClient } from './session.js';
 import type {
+  ListRecentChatsOptions,
   NormalizedInbound,
   SendImagesOptions,
   SendTextOptions,
@@ -65,19 +67,29 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
   }
 
   private async handleMessage(message: ZaloListenerMessage): Promise<void> {
-    if (message.isSelf) return;
     // User + Group (group chỉ forward nếu đã có trong DB — inbound lọc)
     if (message.type !== ThreadType.User && message.type !== ThreadType.Group) return;
+
+    const threadKind: ZaloThreadKind =
+      message.type === ThreadType.Group ? 'group' : 'user';
+    const zaloUserId = String(message.threadId);
+    const displayName =
+      typeof message.data.dName === 'string' ? message.data.dName : undefined;
+    const atMs =
+      normalizeZaloTs(
+        message.data.ts != null ? Number(message.data.ts) : undefined,
+      ) ?? Date.now();
+    // Ghi activity cả tin tự gửi — phản ánh chat gần đây trên nick
+    touchThreadActivity(this.mode, zaloUserId, threadKind, atMs, displayName);
+
+    if (message.isSelf) return;
     if (!this.handler) return;
 
     const content = message.data.content;
-    const displayName =
-      typeof message.data.dName === 'string' ? message.data.dName : undefined;
     const messageId =
       message.data.msgId != null ? String(message.data.msgId) : undefined;
     const msgType =
       typeof message.data.msgType === 'string' ? message.data.msgType : undefined;
-    const zaloUserId = String(message.threadId);
 
     if (typeof content === 'string' && content.trim()) {
       await this.handler({
@@ -119,51 +131,22 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
   }
 
   /**
-   * Recent chats: 1-1 (friends.lastActionTime) + groups (getAllGroups).
-   * Zalo has no dedicated "recent chats" API — same approach as zca CLIs.
+   * Chat gần đây: user theo friends.lastActionTime; group theo
+   * unread.ts + activity DB + (tuỳ chọn) probe getGroupChatHistory —
+   * không dùng createdTime (sai thứ tự "gần đây").
    */
-  async listRecentChats(limit = 50): Promise<ZaloContact[]> {
+  async listRecentChats(
+    limit = 50,
+    opts?: ListRecentChatsOptions,
+  ): Promise<ZaloContact[]> {
     const api = await getZaloApi();
     const capped = Math.max(1, Math.min(limit, 200));
-    const items: ZaloContact[] = [];
+    const focus = opts?.focus ?? 'all';
+    const probeHistory =
+      opts?.probeGroupHistory ?? focus === 'group';
 
-    const friends = await api.getAllFriends();
-    const users = [...(friends ?? [])]
-      .filter((f) => (f.lastActionTime ?? 0) > 0)
-      .sort((a, b) => (b.lastActionTime ?? 0) - (a.lastActionTime ?? 0))
-      .slice(0, capped)
-      .map((f) => ({ ...mapFriend(f), kind: 'user' as const }));
-    items.push(...users);
-
-    try {
-      const groupsResult = await api.getAllGroups();
-      const groupIds = Object.keys(groupsResult?.gridVerMap ?? {});
-      const take = groupIds.slice(0, capped);
-      const batchSize = 40;
-      for (let i = 0; i < take.length; i += batchSize) {
-        const batch = take.slice(i, i + batchSize);
-        try {
-          const info = await api.getGroupInfo(batch);
-          const map = info?.gridInfoMap ?? {};
-          for (const [gid, g] of Object.entries(map)) {
-            items.push({
-              zaloUserId: String(gid),
-              displayName: g.name || `Group ${gid}`,
-              kind: 'group',
-              memberCount: g.totalMember,
-              lastActiveAt: normalizeZaloTs(g.createdTime),
-            });
-          }
-        } catch (err) {
-          logger.warn({ err, batchSize: batch.length }, 'getGroupInfo batch failed');
-        }
-      }
-    } catch (err) {
-      logger.warn({ err }, 'getAllGroups failed — returning users only');
-    }
-
-    const unreadUser = new Set<string>();
-    const unreadGroup = new Set<string>();
+    const activityMap = getThreadActivityMap(this.mode);
+    const unreadTs = new Map<string, number>();
     const pinned = new Set<string>();
 
     try {
@@ -171,11 +154,13 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
         const unread = await api.getUnreadMark();
         for (const u of unread?.data?.convsUser ?? []) {
           const id = String(u.fromUid ?? u.id ?? '');
-          if (id) unreadUser.add(id);
+          const ts = normalizeZaloTs(u.ts != null ? Number(u.ts) : undefined);
+          if (id && ts) unreadTs.set(id, ts);
         }
         for (const g of unread?.data?.convsGroup ?? []) {
           const id = String(g.id ?? g.fromUid ?? '');
-          if (id) unreadGroup.add(id);
+          const ts = normalizeZaloTs(g.ts != null ? Number(g.ts) : undefined);
+          if (id && ts) unreadTs.set(id, ts);
         }
       }
     } catch (err) {
@@ -194,19 +179,92 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
       logger.warn({ err }, 'getPinConversations failed');
     }
 
-    const score = (c: ZaloContact): number => {
-      let s = c.lastActiveAt ?? 0;
-      const isUnread =
-        c.kind === 'group' ? unreadGroup.has(c.zaloUserId) : unreadUser.has(c.zaloUserId);
-      if (isUnread) s += 1e15;
-      if (pinned.has(c.zaloUserId)) s += 1e14;
-      // Prefer users slightly when scores equal-ish (users have real lastActionTime)
-      if (c.kind === 'user') s += 1e10;
-      return s;
+    const pickActive = (id: string, fallback?: number): number | undefined => {
+      const candidates = [activityMap.get(id), unreadTs.get(id), fallback].filter(
+        (n): n is number => typeof n === 'number' && n > 0,
+      );
+      return candidates.length ? Math.max(...candidates) : undefined;
     };
 
-    items.sort((a, b) => score(b) - score(a));
-    return items.slice(0, Math.min(items.length, capped * 2));
+    const items: ZaloContact[] = [];
+
+    if (focus !== 'group') {
+      const friends = await api.getAllFriends();
+      for (const f of friends ?? []) {
+        const id = String(f.userId);
+        const last =
+          pickActive(id, normalizeZaloTs(f.lastActionTime)) ??
+          normalizeZaloTs(f.lastActionTime);
+        if (!last && !pinned.has(id)) continue;
+        items.push({
+          ...mapFriend(f),
+          kind: 'user',
+          lastActiveAt: last,
+        });
+      }
+    }
+
+    if (focus !== 'user') {
+      try {
+        const groupsResult = await api.getAllGroups();
+        const groupIds = Object.keys(groupsResult?.gridVerMap ?? {});
+        const groups: ZaloContact[] = [];
+        const batchSize = 40;
+        for (let i = 0; i < groupIds.length; i += batchSize) {
+          const batch = groupIds.slice(i, i + batchSize);
+          try {
+            const info = await api.getGroupInfo(batch);
+            const map = info?.gridInfoMap ?? {};
+            for (const [gid, g] of Object.entries(map)) {
+              const id = String(gid);
+              groups.push({
+                zaloUserId: id,
+                displayName: g.name || `Group ${id}`,
+                kind: 'group',
+                memberCount: g.totalMember,
+                lastActiveAt: pickActive(id),
+              });
+            }
+          } catch (err) {
+            logger.warn({ err, batchSize: batch.length }, 'getGroupInfo batch failed');
+          }
+        }
+
+        const missing = groups.filter((g) => g.lastActiveAt == null);
+        if (probeHistory && missing.length > 0 && typeof api.getGroupChatHistory === 'function') {
+          // Ưu tiên probe group ghim / chưa có ts — tối đa 120 để tránh quá lâu
+          const toProbe = missing.slice(0, 120);
+          logger.info(
+            { count: toProbe.length, totalGroups: groups.length },
+            'Probing group chat history for last activity',
+          );
+          const probed = await mapPool(toProbe, 6, async (g) => {
+            const ts = await probeGroupLastMessageTs(api, g.zaloUserId);
+            return { id: g.zaloUserId, ts, name: g.displayName };
+          });
+          for (const p of probed) {
+            if (!p.ts) continue;
+            touchThreadActivity(this.mode, p.id, 'group', p.ts, p.name);
+            const g = groups.find((x) => x.zaloUserId === p.id);
+            if (g) g.lastActiveAt = p.ts;
+          }
+        }
+
+        items.push(...groups);
+      } catch (err) {
+        logger.warn({ err }, 'getAllGroups failed — returning without groups');
+      }
+    }
+
+    // Ghim trước, rồi theo lastActiveAt giảm dần (không dùng createdTime)
+    items.sort((a, b) => {
+      const ap = pinned.has(a.zaloUserId) ? 1 : 0;
+      const bp = pinned.has(b.zaloUserId) ? 1 : 0;
+      if (ap !== bp) return bp - ap;
+      return (b.lastActiveAt ?? 0) - (a.lastActiveAt ?? 0);
+    });
+
+    return items.slice(0, capped);
   }
 
   async resolveThreadKind(zaloId: string): Promise<ZaloThreadKind> {
@@ -230,6 +288,7 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
         const api = await getZaloApi();
         const result = await api.sendMessage(text, userId, threadType);
         const messageId = result.message?.msgId;
+        touchThreadActivity(this.mode, userId, threadKind, Date.now());
         logger.info(
           { userId, threadKind, messageId },
           'Personal Zalo sendText ok',
@@ -283,6 +342,7 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
           result.message?.msgId ??
           result.attachment?.[0]?.msgId ??
           'ok';
+        touchThreadActivity(this.mode, userId, threadKind, Date.now());
         logger.info(
           { userId, threadKind, count: images.length, messageId },
           'Personal Zalo sendImages ok',
@@ -319,6 +379,48 @@ function normalizeZaloTs(raw: number | undefined): number | undefined {
   if (raw == null || !Number.isFinite(raw) || raw <= 0) return undefined;
   // seconds vs ms heuristic
   return raw < 1e12 ? raw * 1000 : raw;
+}
+
+async function probeGroupLastMessageTs(
+  api: Awaited<ReturnType<typeof getZaloApi>>,
+  groupId: string,
+): Promise<number | undefined> {
+  try {
+    const hist = await api.getGroupChatHistory!(groupId, 1);
+    const msgs = hist?.groupMsgs ?? [];
+    let best: number | undefined;
+    for (const m of msgs) {
+      const raw =
+        m && typeof m === 'object'
+          ? ((m as { data?: { ts?: string | number }; ts?: string | number }).data?.ts ??
+            (m as { ts?: string | number }).ts)
+          : undefined;
+      const ts = normalizeZaloTs(raw != null ? Number(raw) : undefined);
+      if (ts != null && (best == null || ts > best)) best = ts;
+    }
+    return best;
+  } catch (err) {
+    logger.warn({ err, groupId }, 'getGroupChatHistory probe failed');
+    return undefined;
+  }
+}
+
+async function mapPool<T, R>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (true) {
+      const i = next++;
+      if (i >= items.length) return;
+      results[i] = await fn(items[i]!);
+    }
+  });
+  await Promise.all(workers);
+  return results;
 }
 
 function mapFriend(f: {

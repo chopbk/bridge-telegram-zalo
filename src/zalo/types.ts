@@ -52,6 +52,16 @@ export type SendImagesOptions = SendTextOptions & {
   caption?: string;
 };
 
+export type ListRecentChatsOptions = {
+  /** Chỉ lấy user / group / cả hai */
+  focus?: 'all' | 'user' | 'group';
+  /**
+   * Với group thiếu timestamp: gọi getGroupChatHistory(1) để lấy tin cuối.
+   * Mặc định true khi focus=group.
+   */
+  probeGroupHistory?: boolean;
+};
+
 export interface ZaloAdapter {
   readonly mode: ZaloMode;
   start(): Promise<void>;
@@ -66,8 +76,11 @@ export interface ZaloAdapter {
   onInbound(handler: (msg: NormalizedInbound) => void | Promise<void>): void;
   /** Personal: danh sách bạn bè Zalo. Bot: có thể không hỗ trợ. */
   listContacts?(): Promise<ZaloContact[]>;
-  /** Personal: chat gần đây (1-1 + group). */
-  listRecentChats?(limit?: number): Promise<ZaloContact[]>;
+  /** Personal: chat gần đây (1-1 + group), sắp theo hoạt động thật. */
+  listRecentChats?(
+    limit?: number,
+    opts?: ListRecentChatsOptions,
+  ): Promise<ZaloContact[]>;
   /** Personal: đoán id là user hay group. */
   resolveThreadKind?(zaloId: string): Promise<ZaloThreadKind>;
 }
