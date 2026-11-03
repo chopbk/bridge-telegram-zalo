@@ -1,0 +1,15 @@
+---
+description: Commit immediately after finishing each feature or logical unit of work
+alwaysApply: true
+---
+
+# Commit after each feature
+
+When a feature, fix, or docs unit is **done and verified** (typecheck/tests as relevant):
+
+1. Create a **focused git commit** for that unit — do not batch unrelated work.
+2. Use conventional messages (`feat:`, `fix:`, `docs:`, `chore:`, `test:`).
+3. Follow the repo git safety rules (no force push, no secrets, HEREDOC commit message).
+4. Do **not** wait for the user to ask “commit đi” if they already set this workflow; still do **not** push unless they ask.
+
+Skip commit only if the change is still WIP or the user explicitly says not to commit yet.
