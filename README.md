@@ -10,6 +10,7 @@ Bridge **Telegram ↔ Zalo** for customer support and channel broadcasts.
 
 - Spec: [SPEC.md](./SPEC.md)
 - Tiếng Việt: [docs/README.vi.md](./docs/README.vi.md)
+- **Hướng dẫn admin (VN):** [docs/ADMIN.vi.md](./docs/ADMIN.vi.md)
 - License: [MIT](./LICENSE)
 - Contact: Telegram [@mrwin68](https://t.me/mrwin68)
 

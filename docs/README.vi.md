@@ -10,6 +10,7 @@ Bridge **Telegram ↔ Zalo** cho hỗ trợ khách và broadcast kênh.
 
 - Spec: [../SPEC.md](../SPEC.md)
 - English (mặc định GitHub): [../README.md](../README.md)
+- **Hướng dẫn admin:** [ADMIN.vi.md](./ADMIN.vi.md) ← bắt đầu từ đây nếu bạn vận hành bot
 - Giấy phép: [MIT](../LICENSE)
 - Liên hệ: Telegram [@mrwin68](https://t.me/mrwin68)
 
