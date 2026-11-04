@@ -8,43 +8,64 @@ export function maskSecret(value: string | undefined, keepStart = 4, keepEnd = 4
   return `${value.slice(0, keepStart)}…${value.slice(-keepEnd)}`;
 }
 
+function shortTgError(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err);
+  const m = raw.match(/Bad Request:\s*(.+?)\)?\s*$/i) ?? raw.match(/:\s*(.+)$/);
+  const detail = (m?.[1] ?? raw).replace(/\)$/, '').trim();
+  return detail.length > 80 ? `${detail.slice(0, 77)}…` : detail;
+}
+
+function kv(label: string, value: string | number): string {
+  return `${label.padEnd(14)} ${value}`;
+}
+
 async function checkChat(
   api: Api,
   label: string,
   chatId: number,
   botId: number,
 ): Promise<string[]> {
-  const lines: string[] = [];
+  const head = `▸ ${label}`;
   try {
     const chat = await api.getChat(chatId);
-    const title = 'title' in chat ? chat.title : undefined;
-    const forum = 'is_forum' in chat ? Boolean(chat.is_forum) : false;
-    lines.push(
-      `${label}: ok id=${chat.id} type=${chat.type}` +
-        (title ? ` title=${title}` : '') +
-        (forum ? ' forum=yes' : ''),
-    );
+    const title = 'title' in chat && chat.title ? String(chat.title) : '—';
+    const kind =
+      chat.type === 'channel'
+        ? 'channel'
+        : 'is_forum' in chat && chat.is_forum
+          ? 'forum'
+          : chat.type;
+
+    let botLine = 'bot: ?';
     try {
       const member = await api.getChatMember(chatId, botId);
       const status = member.status;
-      const okAdmin =
-        status === 'administrator' || status === 'creator';
-      lines.push(
-        `  bot member: ${status}${okAdmin ? ' ✓' : ' ⚠ cần admin (+ Manage Topics nếu forum)'}`,
-      );
+      const okAdmin = status === 'administrator' || status === 'creator';
+      botLine = okAdmin
+        ? `bot: ${status} ✓`
+        : `bot: ${status} ⚠ cần admin` +
+          (kind === 'forum' ? ' + Manage Topics' : '');
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      lines.push(`  bot member: lỗi — ${msg}`);
+      botLine = `bot: lỗi — ${shortTgError(err)}`;
     }
+
+    return [
+      head,
+      `  ${title}`,
+      `  id ${chat.id} · ${kind}`,
+      `  ${botLine}`,
+    ];
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    lines.push(`${label}: LỖI id=${chatId} — ${msg}`);
+    return [
+      head,
+      `  id ${chatId}`,
+      `  ✗ ${shortTgError(err)}`,
+    ];
   }
-  return lines;
 }
 
 /**
- * Báo cáo cấu hình .env (che secret) + kiểm tra live forum/channel với Telegram API.
+ * Báo cáo cấu hình .env (che secret) + kiểm tra live forum/channel.
  */
 export async function buildConfigReport(
   api: Api,
@@ -52,41 +73,59 @@ export async function buildConfigReport(
 ): Promise<string> {
   const env = getEnv();
   const me = await api.getMe();
+  const lines: string[] = [];
 
-  const lines: string[] = [
-    '=== Cấu hình bridge ===',
-    `bot: @${me.username ?? '—'} id=${me.id}`,
-    `ZALO_MODE: ${adapter.mode} (env=${env.ZALO_MODE})`,
-    `TELEGRAM_FORUM_GROUP_ID: ${env.telegramForumGroupId}`,
-    `TELEGRAM_CHANNEL_ID: ${env.telegramChannelIds.join(',')} (${env.telegramChannelIds.length})`,
-    `TELEGRAM_ADMIN_IDS: ${env.telegramAdminIds.join(',')} (${env.telegramAdminIds.length})`,
-    `TELEGRAM_BOT_TOKEN: ${maskSecret(env.TELEGRAM_BOT_TOKEN, 8, 4)}`,
-    `DATABASE_PATH: ${env.DATABASE_PATH}`,
-    `LOG_LEVEL: ${env.LOG_LEVEL}`,
-    `PORT: ${env.PORT}`,
-    `LIST_PAGE_SIZE: ${env.LIST_PAGE_SIZE}`,
-    `JOB_MAX_RETRIES: ${env.JOB_MAX_RETRIES}`,
-    `ZALO_MIN_SEND_INTERVAL_MS: ${env.ZALO_MIN_SEND_INTERVAL_MS}`,
-    `ZALO_SEND_MAX_PER_MINUTE: ${env.ZALO_SEND_MAX_PER_MINUTE}`,
-  ];
+  lines.push(
+    '── Bridge ──',
+    kv('Bot', `@${me.username ?? '—'} (${me.id})`),
+    kv('Mode', `${adapter.mode}`),
+    kv('DB', env.DATABASE_PATH),
+    kv('Log', env.LOG_LEVEL),
+    kv('Port', env.PORT),
+  );
+
+  lines.push(
+    '',
+    '── Telegram ──',
+    kv('Forum', String(env.telegramForumGroupId)),
+    kv(
+      'Channels',
+      env.telegramChannelIds.length
+        ? env.telegramChannelIds.map(String).join('\n' + ' '.repeat(15))
+        : '(none)',
+    ),
+    kv('Admins', env.telegramAdminIds.join(', ')),
+    kv('Token', maskSecret(env.TELEGRAM_BOT_TOKEN, 8, 4)),
+  );
+
+  lines.push(
+    '',
+    '── Rate limit ──',
+    kv('Interval', `${env.ZALO_MIN_SEND_INTERVAL_MS} ms`),
+    kv('Max/min', String(env.ZALO_SEND_MAX_PER_MINUTE)),
+    kv('Job retry', String(env.JOB_MAX_RETRIES)),
+    kv('List page', String(env.LIST_PAGE_SIZE)),
+  );
 
   if (env.ZALO_MODE === 'personal') {
-    lines.push(`ZALO_SESSION_PATH: ${env.ZALO_SESSION_PATH}`);
+    lines.push('', '── Zalo personal ──', kv('Session', env.ZALO_SESSION_PATH));
   } else {
     lines.push(
-      `ZALO_BOT_TOKEN: ${maskSecret(env.ZALO_BOT_TOKEN)}`,
-      `zaloBotTransport: ${env.zaloBotTransport}`,
-      `ZALO_BOT_WEBHOOK_PATH: ${env.ZALO_BOT_WEBHOOK_PATH}`,
-      `ZALO_BOT_WEBHOOK_SECRET: ${maskSecret(env.ZALO_BOT_WEBHOOK_SECRET)}`,
-      `ZALO_BOT_POLL_TIMEOUT_SEC: ${env.ZALO_BOT_POLL_TIMEOUT_SEC}`,
+      '',
+      '── Zalo bot ──',
+      kv('Token', maskSecret(env.ZALO_BOT_TOKEN)),
+      kv('Transport', env.zaloBotTransport),
+      kv('Webhook', env.ZALO_BOT_WEBHOOK_PATH),
+      kv('Secret', maskSecret(env.ZALO_BOT_WEBHOOK_SECRET)),
+      kv('Poll sec', env.ZALO_BOT_POLL_TIMEOUT_SEC),
     );
   }
 
-  lines.push('', '=== Kiểm tra Telegram ===');
-  lines.push(...(await checkChat(api, 'forum', env.telegramForumGroupId, me.id)));
+  lines.push('', '── Kiểm tra live ──');
+  lines.push(...(await checkChat(api, 'Forum', env.telegramForumGroupId, me.id)));
   for (let i = 0; i < env.telegramChannelIds.length; i++) {
     const label =
-      env.telegramChannelIds.length === 1 ? 'channel' : `channel[${i + 1}]`;
+      env.telegramChannelIds.length === 1 ? 'Channel' : `Channel ${i + 1}`;
     lines.push(...(await checkChat(api, label, env.telegramChannelIds[i]!, me.id)));
   }
 
