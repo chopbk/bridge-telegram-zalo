@@ -94,15 +94,20 @@ Gõ `/help` trên bot để xem bản rút gọn.
 | `/status` | Số liệu nhanh |
 | `/config` | Kiểm tra cấu hình + quyền bot |
 
-### Thêm / sửa
+### Thêm / sửa / xoá
+
+Nhiều id cùng lúc: **cách nhau bởi dấu phẩy** `,`.
 
 | Lệnh | Ví dụ |
 |------|--------|
 | `/useradd <id>` | `/useradd 123` |
 | `/useradd <id> group` | `/useradd 456 group` |
+| `/useradd id1,id2,id3` | `/useradd 111,222,333` |
+| `/useradd id1,id2 group` | Thêm nhiều group |
 | `/useredit <id> name=Tên` | Đổi tên topic/hiển thị |
-| `/useredit <id> status=approved` | Đổi trạng thái |
+| `/useredit id1,id2 status=approved` | Sửa hàng loạt |
 | `/userdel <id>` | Xoá khỏi hệ thống |
+| `/userdel id1,id2,id3` | Xoá hàng loạt |
 
 ### Duyệt
 

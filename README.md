@@ -184,9 +184,9 @@ Only `TELEGRAM_ADMIN_IDS`, in the **forum** or **private chat with the bot**. Co
 | `/user` `[zalo_id]` | Detail (or current topic) |
 | `/zalofriends` `[page]` | Friends on personal Zalo (pick ids to add) |
 | `/zalochats` `[user\|group]` `[n]` | Full recent chats (split messages); `group` probes last-message order |
-| `/useradd` `<zalo_id>` `[group\|user]` `[name]` | Allowlist + create topic |
-| `/useredit` `<zalo_id>` `name=…` `status=…` `kind=group\|user` `muted=0\|1` `blocked=0\|1` | Patch fields |
-| `/userdel` `<zalo_id>` | Remove from DB (+ topic best-effort) |
+| `/useradd` `<id>` `[,id…]` `[group\|user]` `[name]` | Allowlist + create topic (comma = batch) |
+| `/useredit` `<id>` `[,id…]` `name=…` `status=…` `kind=…` `muted=…` `blocked=…` | Patch fields (batch OK) |
+| `/userdel` `<id>` `[,id…]` | Remove from DB (+ topic best-effort) |
 | `/search` `<query>` | Search name / id |
 | `/list` | Legacy list alias |
 

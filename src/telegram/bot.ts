@@ -100,6 +100,47 @@ function parseBool(raw: string): boolean | null {
   return null;
 }
 
+/** Tách nhiều zalo id: `111,222, 333` */
+function parseCommaIds(raw: string): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const part of raw.split(',')) {
+    const id = part.trim();
+    if (!id) continue;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+
+/**
+ * Lấy danh sách id ở đầu lệnh (có thể `id1,id2` hoặc `id1, id2`),
+ * rồi phần còn lại (group|user / name=… / patch).
+ */
+function takeLeadingIds(parts: string[]): { ids: string[]; rest: string[] } {
+  if (parts.length === 0) return { ids: [], rest: [] };
+  const idTokens: string[] = [];
+  let i = 0;
+  for (; i < parts.length; i++) {
+    const p = parts[i]!;
+    if (p === 'group' || p === 'user') break;
+    if (p.includes('=')) break;
+    // id hoặc chuỗi id phân tách phẩy
+    if (/^[\d,\s]+$/.test(p) || (p.includes(',') && !p.includes('='))) {
+      idTokens.push(p);
+      continue;
+    }
+    if (/^\d+$/.test(p)) {
+      idTokens.push(p);
+      continue;
+    }
+    break;
+  }
+  const ids = parseCommaIds(idTokens.join(','));
+  return { ids, rest: parts.slice(i) };
+}
+
 /** Plain text — tách tin theo ~3900 ký tự, ưu tiên cắt ở xuống dòng. */
 async function replyChunks(ctx: Context, text: string): Promise<void> {
   const MAX = 3900;
@@ -155,12 +196,10 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
         '/search <từ khóa>   tìm theo tên / id',
         '/user <zalo_id>     chi tiết 1 khách',
         '',
-        '▸ Thêm / sửa / xoá',
-        '/useradd <id>              thêm (tự lấy tên)',
-        '/useradd <id> group        thêm group',
-        '/useredit <id> name=Tên    đổi tên',
-        '/useredit <id> status=approved',
-        '/userdel <id>              xoá khỏi bridge',
+        '▸ Thêm / sửa / xoá (nhiều id: cách nhau bởi ,)',
+        '/useradd <id>[,id…] [group|user] [tên]',
+        '/useredit <id>[,id…] name=… status=…',
+        '/userdel <id>[,id…]',
         '',
         '▸ Duyệt trong topic (hoặc kèm id)',
         '/approve   /reject',
@@ -426,66 +465,85 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
     if (!(await requireAdmin(ctx))) return;
     const raw = ctx.match?.toString().trim() ?? '';
     const parts = raw.split(/\s+/).filter(Boolean);
-    const zaloId = parts[0];
-    if (!zaloId) {
+    const { ids, rest } = takeLeadingIds(parts);
+    if (ids.length === 0) {
       await ctx.reply(
         [
-          'Dùng: /useradd <zalo_id> [group|user] [tên]',
-          '→ thêm allowlist (approved). Không ghi tên thì bot tự lấy từ Zalo.',
+          'Dùng:',
+          '/useradd <zalo_id> [group|user] [tên]',
+          '/useradd <id1>,<id2>,<id3> [group|user]',
+          '→ thêm allowlist (approved). Nhiều id cách nhau bởi dấu phẩy.',
+          'Không ghi tên thì bot tự lấy từ Zalo (từng id).',
         ].join('\n'),
       );
       return;
     }
 
-    let threadKind: 'user' | 'group' | undefined;
-    let nameParts = parts.slice(1);
+    let forceKind: 'user' | 'group' | undefined;
+    let nameParts = rest;
     if (nameParts[0] === 'group' || nameParts[0] === 'user') {
-      threadKind = nameParts[0] as 'user' | 'group';
+      forceKind = nameParts[0] as 'user' | 'group';
       nameParts = nameParts.slice(1);
     }
-    let displayName = nameParts.length ? nameParts.join(' ') : undefined;
+    // Tên chung chỉ áp dụng khi thêm 1 id (tránh gán cùng tên cho cả batch)
+    const sharedName =
+      ids.length === 1 && nameParts.length ? nameParts.join(' ') : undefined;
 
-    try {
-      // Tự nhận kind + tên từ Zalo nếu admin chưa ghi
-      if (adapter.resolveThreadMeta) {
-        const meta = await adapter.resolveThreadMeta(zaloId);
-        threadKind = threadKind ?? meta.kind;
-        if (!displayName && meta.displayName) displayName = meta.displayName;
-      } else if (!threadKind && adapter.resolveThreadKind) {
-        threadKind = await adapter.resolveThreadKind(zaloId);
-      }
-      threadKind = threadKind ?? 'user';
-
-      const { customer, created } = await addAllowedCustomer(
-        ctx.api,
-        adapter.mode,
-        zaloId,
-        displayName,
-        threadKind,
-      );
-      await ctx.reply(
-        [
-          created
-            ? `✅ Đã thêm ${threadKind} mới (approved)`
-            : `✅ Đã cập nhật → approved (${customer.threadKind})`,
-          displayName ? `name=${displayName}` : 'name=(không lấy được từ Zalo — có thể sửa /useredit)',
-          formatCustomerDetail(customer),
-        ].join('\n'),
-      );
-    } catch (err) {
-      logger.error({ err, zaloId }, 'useradd failed');
-      await ctx.reply('Thêm thất bại. Xem log.');
+    if (ids.length > 1) {
+      await ctx.reply(`Đang thêm ${ids.length} id…`);
     }
+
+    const lines: string[] = [];
+    let ok = 0;
+    let fail = 0;
+    for (const zaloId of ids) {
+      try {
+        let threadKind = forceKind;
+        let displayName = sharedName;
+        if (adapter.resolveThreadMeta) {
+          const meta = await adapter.resolveThreadMeta(zaloId);
+          threadKind = threadKind ?? meta.kind;
+          if (!displayName && meta.displayName) displayName = meta.displayName;
+        } else if (!threadKind && adapter.resolveThreadKind) {
+          threadKind = await adapter.resolveThreadKind(zaloId);
+        }
+        threadKind = threadKind ?? 'user';
+
+        const { customer, created } = await addAllowedCustomer(
+          ctx.api,
+          adapter.mode,
+          zaloId,
+          displayName,
+          threadKind,
+        );
+        ok += 1;
+        lines.push(
+          `${created ? '+' : '~'} [${customer.threadKind}] ${customer.displayName ?? '—'} id=${customer.zaloUserId}`,
+        );
+      } catch (err) {
+        fail += 1;
+        logger.error({ err, zaloId }, 'useradd failed');
+        lines.push(`✗ ${zaloId} — ${err instanceof Error ? err.message : 'lỗi'}`);
+      }
+    }
+
+    await replyChunks(
+      ctx,
+      [`✅ useradd xong: ok=${ok} fail=${fail}`, ...lines].join('\n'),
+    );
   });
 
   bot.command(['useredit', 'user_edit'], async (ctx) => {
     if (!(await requireAdmin(ctx))) return;
     const raw = ctx.match?.toString().trim() ?? '';
     const tokens = raw.split(/\s+/).filter(Boolean);
-    if (tokens.length < 2) {
+    const { ids, rest } = takeLeadingIds(tokens);
+    if (ids.length === 0 || rest.length === 0) {
       await ctx.reply(
         [
-          'Dùng: /useredit <zalo_id> name=Tên status=approved kind=group muted=0 blocked=0',
+          'Dùng:',
+          '/useredit <zalo_id> name=Tên status=approved kind=group muted=0 blocked=0',
+          '/useredit <id1>,<id2> status=approved muted=1',
           'status: pending|approved|rejected|unsubscribed',
           'kind: user|group',
         ].join('\n'),
@@ -493,7 +551,6 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
       return;
     }
 
-    const zaloId = tokens[0]!;
     const patch: {
       displayName?: string | null;
       subscriptionStatus?: SubscriptionStatus;
@@ -502,7 +559,7 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
       threadKind?: 'user' | 'group';
     } = {};
 
-    for (const token of tokens.slice(1)) {
+    for (const token of rest) {
       const eq = token.indexOf('=');
       if (eq <= 0) continue;
       const key = token.slice(0, eq).toLowerCase();
@@ -548,34 +605,74 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
       return;
     }
 
-    const updated = editCustomer(zaloId, adapter.mode, patch);
-    if (!updated) {
-      await ctx.reply(`Không tìm thấy: ${zaloId}`);
-      return;
+    const lines: string[] = [];
+    let ok = 0;
+    let fail = 0;
+    for (const zaloId of ids) {
+      const updated = editCustomer(zaloId, adapter.mode, patch);
+      if (!updated) {
+        fail += 1;
+        lines.push(`✗ không tìm thấy: ${zaloId}`);
+        continue;
+      }
+      ok += 1;
+      lines.push(
+        `~ ${updated.displayName ?? '—'} id=${updated.zaloUserId} [${updated.subscriptionStatus}]`,
+      );
     }
-    await ctx.reply(['✅ Đã sửa', formatCustomerDetail(updated)].join('\n'));
+
+    await replyChunks(
+      ctx,
+      [`✅ useredit xong: ok=${ok} fail=${fail}`, ...lines].join('\n'),
+    );
   });
 
   bot.command(['userdel', 'user_del'], async (ctx) => {
     if (!(await requireAdmin(ctx))) return;
-    const zaloId = ctx.match?.toString().trim().split(/\s+/)[0] ?? '';
-    if (!zaloId) {
-      await ctx.reply('Dùng: /userdel <zalo_id>\nXoá khỏi DB và cố gắng xoá topic Telegram.');
+    const raw = ctx.match?.toString().trim() ?? '';
+    const { ids } = takeLeadingIds(raw.split(/\s+/).filter(Boolean));
+    if (ids.length === 0) {
+      await ctx.reply(
+        [
+          'Dùng:',
+          '/userdel <zalo_id>',
+          '/userdel <id1>,<id2>,<id3>',
+          'Xoá khỏi DB và cố gắng xoá topic Telegram.',
+        ].join('\n'),
+      );
       return;
     }
-    try {
-      const removed = await removeCustomer(ctx.api, adapter.mode, zaloId);
-      if (!removed) {
-        await ctx.reply(`Không tìm thấy: ${zaloId}`);
-        return;
-      }
-      await ctx.reply(
-        `🗑 Đã xoá ${removed.displayName ?? removed.zaloUserId} (zalo=${removed.zaloUserId})`,
-      );
-    } catch (err) {
-      logger.error({ err, zaloId }, 'userdel failed');
-      await ctx.reply('Xoá thất bại. Xem log.');
+
+    if (ids.length > 1) {
+      await ctx.reply(`Đang xoá ${ids.length} id…`);
     }
+
+    const lines: string[] = [];
+    let ok = 0;
+    let fail = 0;
+    for (const zaloId of ids) {
+      try {
+        const removed = await removeCustomer(ctx.api, adapter.mode, zaloId);
+        if (!removed) {
+          fail += 1;
+          lines.push(`✗ không tìm thấy: ${zaloId}`);
+          continue;
+        }
+        ok += 1;
+        lines.push(
+          `🗑 ${removed.displayName ?? removed.zaloUserId} id=${removed.zaloUserId}`,
+        );
+      } catch (err) {
+        fail += 1;
+        logger.error({ err, zaloId }, 'userdel failed');
+        lines.push(`✗ ${zaloId} — ${err instanceof Error ? err.message : 'lỗi'}`);
+      }
+    }
+
+    await replyChunks(
+      ctx,
+      [`✅ userdel xong: ok=${ok} fail=${fail}`, ...lines].join('\n'),
+    );
   });
 
   bot.command('search', async (ctx) => {
