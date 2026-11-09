@@ -1,4 +1,4 @@
-import { DatabaseSync } from 'node:sqlite';
+import Database from 'better-sqlite3';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { getEnv } from '../config/env.js';
@@ -20,32 +20,34 @@ export type CustomerRow = {
   updated_at: string;
 };
 
-let db: DatabaseSync | null = null;
+export type AppDatabase = Database.Database;
 
-export function getDb(): DatabaseSync {
+let db: AppDatabase | null = null;
+
+export function getDb(): AppDatabase {
   if (db) return db;
   const path = getEnv().DATABASE_PATH;
   mkdirSync(dirname(path), { recursive: true });
-  db = new DatabaseSync(path);
+  db = new Database(path);
   db.exec('PRAGMA journal_mode = WAL;');
   db.exec('PRAGMA foreign_keys = ON;');
   migrate(db);
   return db;
 }
 
-function tableExists(database: DatabaseSync, name: string): boolean {
+function tableExists(database: AppDatabase, name: string): boolean {
   const row = database
     .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`)
     .get(name) as { name: string } | undefined;
   return Boolean(row);
 }
 
-function columnNames(database: DatabaseSync, table: string): Set<string> {
+function columnNames(database: AppDatabase, table: string): Set<string> {
   const rows = database.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
   return new Set(rows.map((r) => r.name));
 }
 
-function migrate(database: DatabaseSync): void {
+function migrate(database: AppDatabase): void {
   database.exec(`
     CREATE TABLE IF NOT EXISTS schema_meta (
       key TEXT PRIMARY KEY,
@@ -128,7 +130,7 @@ function migrate(database: DatabaseSync): void {
   `);
 }
 
-function migrateToV2(database: DatabaseSync): void {
+function migrateToV2(database: AppDatabase): void {
   const hasCustomers = tableExists(database, 'customers');
   if (!hasCustomers) {
     createCustomersV2(database);
@@ -206,7 +208,7 @@ function migrateToV2(database: DatabaseSync): void {
   `);
 }
 
-function createCustomersV2(database: DatabaseSync): void {
+function createCustomersV2(database: AppDatabase): void {
   database.exec(`
     CREATE TABLE customers (
       provider TEXT NOT NULL CHECK (provider IN ('bot', 'personal')),
@@ -231,7 +233,7 @@ function createCustomersV2(database: DatabaseSync): void {
   `);
 }
 
-function migrateToV3(database: DatabaseSync): void {
+function migrateToV3(database: AppDatabase): void {
   if (!tableExists(database, 'customers')) {
     createCustomersV2(database);
     return;
@@ -244,7 +246,7 @@ function migrateToV3(database: DatabaseSync): void {
   }
 }
 
-function migrateToV4(database: DatabaseSync): void {
+function migrateToV4(database: AppDatabase): void {
   database.exec(`
     CREATE TABLE IF NOT EXISTS thread_activity (
       provider TEXT NOT NULL,

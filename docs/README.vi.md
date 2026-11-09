@@ -35,7 +35,7 @@ Bridge **Telegram ↔ Zalo** cho hỗ trợ khách và broadcast kênh.
 
 ## Yêu cầu
 
-- **Node.js ≥ 22.5** (`node:sqlite`; khuyến nghị 22/24 LTS)
+- **Node.js ≥ 18** (`better-sqlite3`; khuyến nghị 20/22 LTS)
 - Bot Telegram (BotFather)
 - **Supergroup bật Topics**; bot **admin** (có Manage Topics)
 - Một hoặc nhiều **channel**; bot admin

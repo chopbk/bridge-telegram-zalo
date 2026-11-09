@@ -35,7 +35,7 @@ Bridge **Telegram ↔ Zalo** for customer support and channel broadcasts.
 
 ## Requirements
 
-- **Node.js ≥ 22.5** (built-in `node:sqlite`; 22/24 LTS recommended)
+- **Node.js ≥ 18** (`better-sqlite3`; 20/22 LTS recommended)
 - Telegram bot (BotFather)
 - Telegram **supergroup with Topics** enabled; bot is **admin** with manage topics
 - One or more Telegram **channels**; bot is admin / can post

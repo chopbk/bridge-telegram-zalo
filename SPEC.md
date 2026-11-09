@@ -20,7 +20,7 @@ Một codebase, **2 adapter** luôn có trong code. Runtime chỉ bật 1 mode:
 ## MVP scope
 
 - Text + ảnh 2 chiều (1 ảnh / album nhiều ảnh); file/voice/khác → báo topic (`[Chưa hỗ trợ]`)
-- Mapping SQLite bền (`node:sqlite`), keyed theo `(provider, zalo_user_id)`
+- Mapping SQLite bền (`better-sqlite3`), keyed theo `(provider, zalo_user_id)`
 - Đăng ký: `pending` / `approved` / `rejected` / `unsubscribed`; mute admin ≠ hủy đăng ký
 - Anti-loop (bỏ qua tin bot Telegram tự gửi)
 - Admin bắt buộc (`TELEGRAM_ADMIN_IDS`); lệnh chỉ trong forum group; reply topic chỉ admin
@@ -34,7 +34,7 @@ Một codebase, **2 adapter** luôn có trong code. Runtime chỉ bật 1 mode:
 
 ## Stack ghi chú
 
-- DB: Node built-in `node:sqlite`
+- DB: `better-sqlite3`
 - Telegram: grammY polling
 - Zalo Bot: `bot-api.zaloplatforms.com` — local `getUpdates`; production webhook + secret
 - Zalo Personal: `zca-js@2.1.2`
