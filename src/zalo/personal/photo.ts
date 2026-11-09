@@ -1,6 +1,6 @@
 import type { InboundImage } from '../types.js';
 
-function isPhotoMsgType(msgType?: string): boolean {
+export function isPhotoMsgType(msgType?: string): boolean {
   if (!msgType) return false;
   const t = msgType.toLowerCase();
   return t === 'chat.photo' || t.includes('photo') || t === 'chat.doodle';

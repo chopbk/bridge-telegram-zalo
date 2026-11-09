@@ -19,7 +19,7 @@ Một codebase, **2 adapter** luôn có trong code. Runtime chỉ bật 1 mode:
 
 ## MVP scope
 
-- Text + ảnh 2 chiều (1 ảnh / album nhiều ảnh); file/voice/khác → báo topic (`[Chưa hỗ trợ]`)
+- Text + ảnh + link preview 2 chiều (1 ảnh / album nhiều ảnh); file/voice/khác → báo topic (`[Chưa hỗ trợ]`)
 - Mapping SQLite bền (`better-sqlite3`), keyed theo `(provider, zalo_user_id)`
 - Đăng ký: `pending` / `approved` / `rejected` / `unsubscribed`; mute admin ≠ hủy đăng ký
 - Anti-loop (bỏ qua tin bot Telegram tự gửi)

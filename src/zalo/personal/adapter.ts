@@ -17,6 +17,7 @@ import type {
   ZaloSendResult,
   ZaloThreadKind,
 } from '../types.js';
+import { extractLinkAttachment, formatLinkText } from './link.js';
 import { captionFromPhotoContent, extractInboundImages } from './photo.js';
 
 type InboundHandler = (msg: NormalizedInbound) => void | Promise<void>;
@@ -122,6 +123,16 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
         ...base,
         text: captionFromPhotoContent(content),
         images,
+      });
+      return;
+    }
+
+    const link = extractLinkAttachment(content, msgType);
+    if (link) {
+      await this.handler({
+        ...base,
+        text: formatLinkText(link),
+        images: link.thumb ? [{ url: link.thumb }] : undefined,
       });
       return;
     }
