@@ -8,6 +8,7 @@ import {
 } from '../db/customers.js';
 import { claimProcessedMessage } from '../db/processed.js';
 import type { NormalizedInbound, ZaloAdapter } from '../zalo/types.js';
+import { zaloStylesToTelegramHtml } from './format.js';
 import { getOrCreateTopic, markTopicMissing } from './mapper.js';
 import { downloadZaloMedia } from './media.js';
 import { isRegisterIntent, isUnsubscribeIntent } from './registration.js';
@@ -29,14 +30,23 @@ export function wireInbound(api: Api, adapter: ZaloAdapter): void {
   });
 }
 
-function formatInboundBody(msg: NormalizedInbound, statusPrefix: string, body: string): string {
+function inboundPrefix(msg: NormalizedInbound, statusPrefix: string): string {
   let sender = '';
   if (msg.isSelf) {
     sender = 'Bạn: ';
   } else if (msg.threadKind === 'group' && (msg.senderName || msg.senderId)) {
     sender = `${msg.senderName || msg.senderId}: `;
   }
-  return `${statusPrefix}${sender}${body}`;
+  return `${statusPrefix}${sender}`;
+}
+
+/** HTML giữ bold/italic/… từ Zalo; prefix (Bạn:/tên) luôn plain. */
+function formatInboundHtml(msg: NormalizedInbound, statusPrefix: string, body: string): string {
+  const prefix = inboundPrefix(msg, statusPrefix);
+  return (
+    zaloStylesToTelegramHtml(prefix, []) +
+    zaloStylesToTelegramHtml(body, msg.styles ?? [])
+  );
 }
 
 async function handleInbound(
@@ -150,8 +160,15 @@ async function handleInbound(
 
   if (msg.images && msg.images.length > 0) {
     const captionBody = text || (isGroup ? '(ảnh)' : '');
-    const caption = formatInboundBody(msg, statusPrefix, captionBody).trim() || undefined;
-    await sendPhotosToTopicSafe(api, customer, msg.images.map((i) => i.url), caption);
+    const caption =
+      formatInboundHtml(msg, statusPrefix, captionBody).trim() || undefined;
+    await sendPhotosToTopicSafe(
+      api,
+      customer,
+      msg.images.map((i) => i.url),
+      caption,
+      Boolean(caption),
+    );
     return;
   }
 
@@ -159,12 +176,13 @@ async function handleInbound(
     await sendToTopicSafe(
       api,
       customer,
-      formatInboundBody(
+      formatInboundHtml(
         msg,
         statusPrefix,
         `[Chưa hỗ trợ] ${msg.unsupportedKind}` +
           (msg.messageId ? ` (msg ${msg.messageId})` : ''),
       ),
+      true,
     );
     return;
   }
@@ -191,14 +209,25 @@ async function handleInbound(
     return;
   }
 
-  await sendToTopicSafe(api, customer, formatInboundBody(msg, statusPrefix, text));
+  await sendToTopicSafe(
+    api,
+    customer,
+    formatInboundHtml(msg, statusPrefix, text),
+    true,
+  );
 }
 
-async function sendToTopicSafe(api: Api, customer: Customer, text: string): Promise<void> {
+async function sendToTopicSafe(
+  api: Api,
+  customer: Customer,
+  text: string,
+  asHtml = false,
+): Promise<void> {
   const env = getEnv();
   try {
     await api.sendMessage(env.telegramForumGroupId, text, {
       message_thread_id: customer.telegramTopicId,
+      ...(asHtml ? { parse_mode: 'HTML' as const } : {}),
     });
     logger.info(
       {
@@ -219,6 +248,7 @@ async function sendPhotosToTopicSafe(
   customer: Customer,
   urls: string[],
   caption?: string,
+  captionAsHtml = false,
 ): Promise<void> {
   const env = getEnv();
   const chatId = env.telegramForumGroupId;
@@ -253,12 +283,18 @@ async function sendPhotosToTopicSafe(
       await api.sendPhoto(chatId, new InputFile(buffers[0]!, 'zalo-photo.jpg'), {
         message_thread_id: threadId,
         caption: caption || undefined,
+        ...(caption && captionAsHtml ? { parse_mode: 'HTML' as const } : {}),
       });
     } else {
       const media = buffers.map((buf, i) => ({
         type: 'photo' as const,
         media: new InputFile(buf, `zalo-photo-${i + 1}.jpg`),
-        ...(i === 0 && caption ? { caption } : {}),
+        ...(i === 0 && caption
+          ? {
+              caption,
+              ...(captionAsHtml ? { parse_mode: 'HTML' as const } : {}),
+            }
+          : {}),
       }));
       await api.sendMediaGroup(chatId, media, {
         message_thread_id: threadId,

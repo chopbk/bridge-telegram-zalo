@@ -26,6 +26,8 @@ export type NormalizedInbound = {
   unsupportedKind?: string;
   /** Tin do chính tài khoản Zalo đang login gửi (để hiện ngữ cảnh hội thoại) */
   isSelf?: boolean;
+  /** Zalo text styles (bold/italic/…) — offset theo `text` thuần */
+  styles?: Array<{ start: number; len: number; st: string }>;
 };
 
 export type ZaloSendResult = {
@@ -46,6 +48,8 @@ export type ZaloContact = {
 
 export type SendTextOptions = {
   threadKind?: ZaloThreadKind;
+  /** Zalo text styles (bold/italic/…) — offset theo chuỗi gửi */
+  styles?: Array<{ start: number; len: number; st: string }>;
 };
 
 /** Buffer attachment ready for zca-js sendMessage */

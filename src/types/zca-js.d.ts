@@ -31,8 +31,16 @@ declare module 'zca-js' {
         };
       };
 
+  export type ZaloTextStyle = {
+    start: number;
+    len: number;
+    st: string;
+    indentSize?: number;
+  };
+
   export type MessageContent = {
     msg: string;
+    styles?: ZaloTextStyle[];
     attachments?: AttachmentSource | AttachmentSource[];
     ttl?: number;
   };
@@ -119,6 +127,14 @@ declare module 'zca-js' {
       ts?: string | number;
       uidFrom?: string | number;
       idTo?: string | number;
+      propertyExt?: {
+        color?: number;
+        size?: number;
+        type?: number;
+        subType?: number;
+        ext?: string;
+      };
+      mentions?: Array<{ uid?: string; pos?: number; len?: number; type?: number }>;
     };
   };
 

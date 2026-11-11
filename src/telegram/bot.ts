@@ -37,6 +37,7 @@ import { notifyAdmins } from './notify.js';
 type PendingAlbum = {
   topicId: number;
   caption?: string;
+  captionEntities?: Array<{ type: string; offset: number; length: number; url?: string }>;
   fileIds: string[];
   timer?: ReturnType<typeof setTimeout>;
 };
@@ -892,7 +893,7 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
     }
 
     try {
-      await forwardTopicToZalo(adapter, topicId, msg.text);
+      await forwardTopicToZalo(adapter, topicId, msg.text, msg.entities);
     } catch (err) {
       logger.error({ err, topicId }, 'Topic→Zalo failed');
       const detail = err instanceof Error ? err.message : 'Gửi Zalo thất bại.';
@@ -917,6 +918,7 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
 
     const largest = msg.photo[msg.photo.length - 1]!;
     const caption = typeof msg.caption === 'string' ? msg.caption : undefined;
+    const captionEntities = msg.caption_entities;
     const groupId = msg.media_group_id;
 
     if (!groupId) {
@@ -925,7 +927,13 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
         const images = await downloadTelegramPhotos(ctx.api, env.TELEGRAM_BOT_TOKEN, [
           largest.file_id,
         ]);
-        await forwardTopicImagesToZalo(adapter, topicId, images, caption);
+        await forwardTopicImagesToZalo(
+          adapter,
+          topicId,
+          images,
+          caption,
+          captionEntities,
+        );
       } catch (err) {
         logger.error({ err, topicId }, 'Topic photo→Zalo failed');
         const detail = err instanceof Error ? err.message : 'Gửi ảnh Zalo thất bại.';
@@ -938,10 +946,13 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
     const key = `${topicId}:${groupId}`;
     let pending = pendingAlbums.get(key);
     if (!pending) {
-      pending = { topicId, caption, fileIds: [] };
+      pending = { topicId, caption, captionEntities, fileIds: [] };
       pendingAlbums.set(key, pending);
     }
-    if (caption && !pending.caption) pending.caption = caption;
+    if (caption && !pending.caption) {
+      pending.caption = caption;
+      pending.captionEntities = captionEntities;
+    }
     pending.fileIds.push(largest.file_id);
     if (pending.timer) clearTimeout(pending.timer);
     pending.timer = setTimeout(() => {
@@ -1067,7 +1078,13 @@ async function flushAlbum(
 
   try {
     const images = await downloadTelegramPhotos(ctx.api, botToken, pending.fileIds);
-    await forwardTopicImagesToZalo(adapter, pending.topicId, images, pending.caption);
+    await forwardTopicImagesToZalo(
+      adapter,
+      pending.topicId,
+      images,
+      pending.caption,
+      pending.captionEntities,
+    );
   } catch (err) {
     logger.error({ err, topicId: pending.topicId, key }, 'Album photo→Zalo failed');
     const detail = err instanceof Error ? err.message : 'Gửi album ảnh Zalo thất bại.';

@@ -18,6 +18,7 @@ import type {
   ZaloSendResult,
   ZaloThreadKind,
 } from '../types.js';
+import { parseZaloPropertyStyles } from '../../bridge/format.js';
 import { extractLinkAttachment, formatLinkText } from './link.js';
 import { captionFromPhotoContent, extractInboundImages } from './photo.js';
 
@@ -102,6 +103,7 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
     const msgType =
       typeof message.data.msgType === 'string' ? message.data.msgType : undefined;
     const isSelf = Boolean(message.isSelf);
+    const styles = parseZaloPropertyStyles(message.data.propertyExt);
 
     const base = {
       zaloUserId,
@@ -112,6 +114,7 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
       displayName: threadKind === 'user' && !isSelf ? senderName : undefined,
       messageId,
       isSelf,
+      styles: styles.length ? styles : undefined,
     };
 
     if (typeof content === 'string' && content.trim()) {
@@ -343,10 +346,15 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
   sendText(userId: string, text: string, opts?: SendTextOptions): Promise<ZaloSendResult> {
     const threadKind = opts?.threadKind ?? 'user';
     const threadType = threadKind === 'group' ? ThreadType.Group : ThreadType.User;
+    const styles = opts?.styles?.filter((s) => s.len > 0) ?? [];
     return this.queue.enqueue(async () => {
       try {
         const api = await getZaloApi();
-        const result = await api.sendMessage(text, userId, threadType);
+        const payload =
+          styles.length > 0
+            ? { msg: text, styles: styles.map((s) => ({ start: s.start, len: s.len, st: s.st })) }
+            : text;
+        const result = await api.sendMessage(payload, userId, threadType);
         const messageId = result.message?.msgId;
         touchThreadActivity(this.mode, userId, threadKind, Date.now());
         // Claim để echo isSelf từ listener không forward lại topic
@@ -383,6 +391,7 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
     const threadKind = opts?.threadKind ?? 'user';
     const threadType = threadKind === 'group' ? ThreadType.Group : ThreadType.User;
     const caption = (opts?.caption ?? '').trim();
+    const styles = opts?.styles?.filter((s) => s.len > 0) ?? [];
     return this.queue.enqueue(async () => {
       // Gửi bằng đường dẫn file tạm — ổn định hơn Buffer với zca-js (cần imageMetadataGetter)
       const tempPaths: string[] = [];
@@ -395,6 +404,9 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
         const result = await api.sendMessage(
           {
             msg: caption,
+            ...(styles.length
+              ? { styles: styles.map((s) => ({ start: s.start, len: s.len, st: s.st })) }
+              : {}),
             attachments: tempPaths.length === 1 ? tempPaths[0]! : tempPaths,
           },
           userId,

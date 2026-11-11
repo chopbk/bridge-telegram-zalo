@@ -1,6 +1,10 @@
 import logger from '../config/logger.js';
 import { canAdminReply } from '../db/customers.js';
 import type { ZaloAdapter, ZaloImageAttachment } from '../zalo/types.js';
+import {
+  telegramEntitiesToZaloStyles,
+  type TelegramEntityLike,
+} from './format.js';
 import { customerByTopic } from './mapper.js';
 
 /**
@@ -10,12 +14,15 @@ export async function forwardTopicToZalo(
   adapter: ZaloAdapter,
   topicId: number,
   text: string,
+  entities?: TelegramEntityLike[],
 ): Promise<void> {
   const customer = requireReceivableCustomer(adapter, topicId);
+  const styles = telegramEntitiesToZaloStyles(text, entities);
 
   try {
     const result = await adapter.sendText(customer.zaloUserId, text, {
       threadKind: customer.threadKind,
+      styles: styles.length ? styles : undefined,
     });
     logger.info(
       {
@@ -23,6 +30,7 @@ export async function forwardTopicToZalo(
         zaloUserId: customer.zaloUserId,
         threadKind: customer.threadKind,
         messageId: result.messageId,
+        styleCount: styles.length,
       },
       'Forwarded Telegram topic → Zalo',
     );
@@ -43,6 +51,7 @@ export async function forwardTopicImagesToZalo(
   topicId: number,
   images: ZaloImageAttachment[],
   caption?: string,
+  captionEntities?: TelegramEntityLike[],
 ): Promise<void> {
   const customer = requireReceivableCustomer(adapter, topicId);
 
@@ -53,10 +62,13 @@ export async function forwardTopicImagesToZalo(
     throw new Error('Không có ảnh để gửi');
   }
 
+  const styles = telegramEntitiesToZaloStyles(caption ?? '', captionEntities);
+
   try {
     const result = await adapter.sendImages(customer.zaloUserId, images, {
       threadKind: customer.threadKind,
       caption,
+      styles: styles.length ? styles : undefined,
     });
     logger.info(
       {
