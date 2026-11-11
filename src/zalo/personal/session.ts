@@ -101,7 +101,8 @@ export async function getZaloApi(): Promise<API> {
 
   loginPromise = (async () => {
     const session = await loadSession();
-    const zalo = new Zalo({ imageMetadataGetter });
+    // selfListen: nhận cả tin do chính tài khoản gửi (để forward ngữ cảnh lên Telegram)
+    const zalo = new Zalo({ imageMetadataGetter, selfListen: true });
     const api = await zalo.login({
       cookie: session.cookie,
       imei: session.imei,
