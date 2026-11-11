@@ -30,10 +30,12 @@ export function wireInbound(api: Api, adapter: ZaloAdapter): void {
 }
 
 function formatInboundBody(msg: NormalizedInbound, statusPrefix: string, body: string): string {
-  const sender =
-    msg.threadKind === 'group' && (msg.senderName || msg.senderId)
-      ? `${msg.senderName || msg.senderId}: `
-      : '';
+  let sender = '';
+  if (msg.isSelf) {
+    sender = 'Bạn: ';
+  } else if (msg.threadKind === 'group' && (msg.senderName || msg.senderId)) {
+    sender = `${msg.senderName || msg.senderId}: `;
+  }
   return `${statusPrefix}${sender}${body}`;
 }
 
@@ -57,9 +59,10 @@ async function handleInbound(
   const existing = findByZaloUserId(msg.zaloUserId, adapter.mode);
   const text = (msg.text ?? '').trim();
 
-  // --- Đăng ký: chỉ áp dụng 1-1 (không auto-register / auto-reply trong group) ---
+  // --- Đăng ký: chỉ áp dụng 1-1, không áp cho tin của chính mình ---
   if (
     !isGroup &&
+    !msg.isSelf &&
     !msg.unsupportedKind &&
     !msg.images?.length &&
     text &&
@@ -168,8 +171,8 @@ async function handleInbound(
 
   if (!text) return;
 
-  // Hủy đăng ký: chỉ 1-1
-  if (!isGroup && isUnsubscribeIntent(text)) {
+  // Hủy đăng ký: chỉ 1-1, không áp cho tin của chính mình
+  if (!isGroup && !msg.isSelf && isUnsubscribeIntent(text)) {
     setSubscriptionStatus(msg.zaloUserId, adapter.mode, 'unsubscribed');
     await sendToTopicSafe(
       api,

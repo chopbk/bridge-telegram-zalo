@@ -4,6 +4,7 @@ import logger from '../../config/logger.js';
 import { SendQueue } from '../../bridge/queue.js';
 import { safeUnlink, writeTempImage } from '../../bridge/media.js';
 import { touchThreadActivity, getThreadActivityMap } from '../../db/thread-activity.js';
+import { claimProcessedMessage } from '../../db/processed.js';
 import { notifyAdmins } from '../../telegram/notify.js';
 import { getZaloApi, resetZaloClient } from './session.js';
 import type {
@@ -93,7 +94,6 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
       threadKind === 'user' ? senderName : undefined,
     );
 
-    if (message.isSelf) return;
     if (!this.handler) return;
 
     const content = message.data.content;
@@ -101,15 +101,17 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
       message.data.msgId != null ? String(message.data.msgId) : undefined;
     const msgType =
       typeof message.data.msgType === 'string' ? message.data.msgType : undefined;
+    const isSelf = Boolean(message.isSelf);
 
     const base = {
       zaloUserId,
       threadKind,
       senderId: threadKind === 'group' ? senderId : undefined,
       senderName: threadKind === 'group' ? senderName : undefined,
-      // 1-1: tên user; group: giữ tên group đã lưu (inbound không ghi đè bằng dName)
-      displayName: threadKind === 'user' ? senderName : undefined,
+      // 1-1: tên peer; bỏ qua khi isSelf để không đổi tên topic thành tên mình
+      displayName: threadKind === 'user' && !isSelf ? senderName : undefined,
       messageId,
+      isSelf,
     };
 
     if (typeof content === 'string' && content.trim()) {
@@ -347,6 +349,10 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
         const result = await api.sendMessage(text, userId, threadType);
         const messageId = result.message?.msgId;
         touchThreadActivity(this.mode, userId, threadKind, Date.now());
+        // Claim để echo isSelf từ listener không forward lại topic
+        if (messageId != null && String(messageId) !== 'ok') {
+          claimProcessedMessage(this.mode, String(messageId));
+        }
         logger.info(
           { userId, threadKind, messageId },
           'Personal Zalo sendText ok',
@@ -403,6 +409,15 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
           );
         }
         touchThreadActivity(this.mode, userId, threadKind, Date.now());
+        for (const a of attachments) {
+          const id = a?.msgId;
+          if (id != null && String(id) !== 'ok') {
+            claimProcessedMessage(this.mode, String(id));
+          }
+        }
+        if (messageId != null && String(messageId) !== 'ok') {
+          claimProcessedMessage(this.mode, String(messageId));
+        }
         logger.info(
           { userId, threadKind, count: images.length, messageId, attachmentCount: attachments.length },
           'Personal Zalo sendImages ok',

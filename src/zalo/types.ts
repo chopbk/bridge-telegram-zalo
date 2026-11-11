@@ -24,6 +24,8 @@ export type NormalizedInbound = {
   images?: InboundImage[];
   /** Non-text inbound (file, voice, …) when images not extracted */
   unsupportedKind?: string;
+  /** Tin do chính tài khoản Zalo đang login gửi (để hiện ngữ cảnh hội thoại) */
+  isSelf?: boolean;
 };
 
 export type ZaloSendResult = {

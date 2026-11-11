@@ -161,7 +161,7 @@ Khách phải nhắn bot Zalo trước mới nhận được tin. Gửi ảnh mo
 
 | Luồng | Chi tiết |
 |------|----------|
-| **A** | Zalo → topic: text + ảnh + link preview; media khác → `[Chưa hỗ trợ]`; group theo group id |
+| **A** | Zalo → topic: text + ảnh + link preview (kể cả tin của mình, prefix `Bạn:`); media khác → `[Chưa hỗ trợ]`; group theo group id |
 | **B** | Topic → Zalo: admin; text / 1 ảnh / album; khách phải receivable |
 | **C** | Channel text/ảnh → job fan-out + báo cáo admin; ảnh tải **1 lần** rồi gửi lần lượt |
 

@@ -166,7 +166,7 @@ Admin `/mute` only pauses **broadcast**; it is not the same as customer unsubscr
 
 | Flow | Detail |
 |------|--------|
-| **A – Zalo → Telegram** | Text + photos + link previews → mapped topic. Other media → `[Chưa hỗ trợ]`. Groups use group id. |
+| **A – Zalo → Telegram** | Text + photos + link previews (incl. own/self messages as `Bạn:`) → mapped topic. Other media → `[Chưa hỗ trợ]`. Groups use group id. |
 | **B – Topic → Zalo** | Admin only. Text, single photo, or album. Target must be receivable (`approved`, not blocked). |
 | **C – Channel → Zalo** | Text or photo/album → SQLite job fan-out to allowlist + admin report (`ok`/`fail`). Photos are downloaded **once** then sent to each target. |
 
