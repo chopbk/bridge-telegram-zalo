@@ -104,14 +104,15 @@ Nhiều id cùng lúc: **cách nhau bởi dấu phẩy** `,`.
 | `/useradd <id> group` | `/useradd 456 group` |
 | `/useradd id1,id2,id3` | `/useradd 111,222,333` |
 | `/useradd id1,id2 group` | Thêm nhiều group |
+| `/useradd id1,id2 readonly` | Chỉ Zalo→Telegram (không reply ngược) |
 | `/useredit <id> name=Tên` | Đổi tên topic/hiển thị |
-| `/useredit id1,id2 status=approved` | Sửa hàng loạt |
+| `/useredit id1,id2 inbound_only=1` | Bật chỉ đọc hàng loạt |
 | `/userdel <id>` | Xoá khỏi hệ thống |
 | `/userdel id1,id2,id3` | Xoá hàng loạt |
 
 ### Duyệt
 
-Trong topic: `/approve` · `/reject` · `/block` · `/unblock` · `/mute` · `/unmute`
+Trong topic: `/approve` · `/reject` · `/block` · `/unblock` · `/mute` · `/unmute` · `/readonly` · `/twoway`
 
 ### Sự cố
 
@@ -139,6 +140,7 @@ Trong topic: `/approve` · `/reject` · `/block` · `/unblock` · `/mute` · `/u
 - **Group Zalo** gắn theo **id group**, không theo từng thành viên gửi tin. Topic hiện `Tên người gửi: nội dung`.
 - Người lạ nhắn Zalo mà chưa đăng ký / chưa `/useradd` → bot **không** tự trả lời, **không** tạo topic.
 - `/mute` ≠ hủy đăng ký của khách.
+- `/readonly` (hoặc `ro` / `1way`): topic chỉ nhận tin Zalo→Telegram; reply trong topic **không** sang Zalo. Bật lại bằng `/twoway`.
 - Ảnh channel/topic đều hỗ trợ; nếu broadcast ảnh lỗi timeout Telegram → kiểm tra mạng rồi `/retrybroadcast`.
 - Forum: bot phải là **admin** (+ Manage Topics). Channel: bot phải là admin. Kiểm bằng `/config`.
 

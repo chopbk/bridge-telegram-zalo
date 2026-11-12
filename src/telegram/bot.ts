@@ -9,6 +9,7 @@ import {
   customerByZaloId,
   editCustomer,
   findCustomers,
+  inboundOnlyByTopic,
   muteByTopic,
   pageCustomers,
   recreateTopicById,
@@ -87,12 +88,23 @@ function formatCustomerLine(c: Customer, index: number): string {
     c.subscriptionStatus,
     c.muted ? 'muted' : null,
     c.blocked ? 'blocked' : null,
+    c.inboundOnly ? 'readonly' : null,
   ]
     .filter(Boolean)
     .join(',');
   const name = c.displayName ?? '(no name)';
   return `${index}. [${c.threadKind}] ${name}\n   zalo=${c.zaloUserId} topic=${c.telegramTopicId} [${flags}]`;
 }
+
+const INBOUND_ONLY_TOKENS = new Set([
+  'readonly',
+  'ro',
+  '1way',
+  'oneway',
+  'inbound',
+  'inbound_only',
+  'inbound-only',
+]);
 
 function parseBool(raw: string): boolean | null {
   const v = raw.toLowerCase();
@@ -198,14 +210,15 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
         '/user <zalo_id>     chi tiết 1 khách',
         '',
         '▸ Thêm / sửa / xoá (nhiều id: cách nhau bởi ,)',
-        '/useradd <id>[,id…] [group|user] [tên]',
-        '/useredit <id>[,id…] name=… status=…',
+        '/useradd <id>[,id…] [group|user] [readonly] [tên]',
+        '/useredit <id>[,id…] name=… inbound_only=1',
         '/userdel <id>[,id…]',
         '',
         '▸ Duyệt trong topic (hoặc kèm id)',
         '/approve   /reject',
         '/block     /unblock',
         '/mute      /unmute     (tắt/bật nhận broadcast)',
+        '/readonly  /twoway     (chỉ Zalo→TG / bật lại 2 chiều)',
         '',
         '▸ Hệ thống',
         '/status              thống kê nhanh',
@@ -471,9 +484,10 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
       await ctx.reply(
         [
           'Dùng:',
-          '/useradd <zalo_id> [group|user] [tên]',
-          '/useradd <id1>,<id2>,<id3> [group|user]',
+          '/useradd <zalo_id> [group|user] [readonly] [tên]',
+          '/useradd <id1>,<id2>,<id3> [group|user] [readonly]',
           '→ thêm allowlist (approved). Nhiều id cách nhau bởi dấu phẩy.',
+          'readonly|ro|1way = chỉ Zalo→Telegram (không reply ngược).',
           'Không ghi tên thì bot tự lấy từ Zalo (từng id).',
         ].join('\n'),
       );
@@ -481,17 +495,28 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
     }
 
     let forceKind: 'user' | 'group' | undefined;
-    let nameParts = rest;
-    if (nameParts[0] === 'group' || nameParts[0] === 'user') {
-      forceKind = nameParts[0] as 'user' | 'group';
-      nameParts = nameParts.slice(1);
+    let inboundOnly = false;
+    const nameParts: string[] = [];
+    for (const token of rest) {
+      const lower = token.toLowerCase();
+      if (lower === 'group' || lower === 'user') {
+        forceKind = lower as 'user' | 'group';
+        continue;
+      }
+      if (INBOUND_ONLY_TOKENS.has(lower)) {
+        inboundOnly = true;
+        continue;
+      }
+      nameParts.push(token);
     }
     // Tên chung chỉ áp dụng khi thêm 1 id (tránh gán cùng tên cho cả batch)
     const sharedName =
       ids.length === 1 && nameParts.length ? nameParts.join(' ') : undefined;
 
     if (ids.length > 1) {
-      await ctx.reply(`Đang thêm ${ids.length} id…`);
+      await ctx.reply(
+        `Đang thêm ${ids.length} id${inboundOnly ? ' (readonly)' : ''}…`,
+      );
     }
 
     const lines: string[] = [];
@@ -516,10 +541,12 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
           zaloId,
           displayName,
           threadKind,
+          { inboundOnly },
         );
         ok += 1;
+        const modeTag = customer.inboundOnly ? ' readonly' : '';
         lines.push(
-          `${created ? '+' : '~'} [${customer.threadKind}] ${customer.displayName ?? '—'} id=${customer.zaloUserId}`,
+          `${created ? '+' : '~'} [${customer.threadKind}]${modeTag} ${customer.displayName ?? '—'} id=${customer.zaloUserId}`,
         );
       } catch (err) {
         fail += 1;
@@ -543,10 +570,11 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
       await ctx.reply(
         [
           'Dùng:',
-          '/useredit <zalo_id> name=Tên status=approved kind=group muted=0 blocked=0',
-          '/useredit <id1>,<id2> status=approved muted=1',
+          '/useredit <zalo_id> name=Tên status=approved kind=group muted=0 blocked=0 inbound_only=1',
+          '/useredit <id1>,<id2> status=approved inbound_only=1',
           'status: pending|approved|rejected|unsubscribed',
           'kind: user|group',
+          'inbound_only: 0|1 (1 = chỉ Zalo→Telegram)',
         ].join('\n'),
       );
       return;
@@ -557,6 +585,7 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
       subscriptionStatus?: SubscriptionStatus;
       muted?: boolean;
       blocked?: boolean;
+      inboundOnly?: boolean;
       threadKind?: 'user' | 'group';
     } = {};
 
@@ -595,6 +624,18 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
           return;
         }
         patch.blocked = b;
+      } else if (
+        key === 'inbound_only' ||
+        key === 'inboundonly' ||
+        key === 'readonly' ||
+        key === 'ro'
+      ) {
+        const b = parseBool(value);
+        if (b == null) {
+          await ctx.reply('inbound_only phải là 0|1');
+          return;
+        }
+        patch.inboundOnly = b;
       } else {
         await ctx.reply(`Không hiểu key: ${key}`);
         return;
@@ -803,6 +844,62 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
       return;
     }
     await ctx.reply(`Đã mute broadcast ${customer.displayName ?? customer.zaloUserId}`);
+  });
+
+  async function setInboundOnlyCommand(ctx: Context, inboundOnly: boolean): Promise<void> {
+    if (!(await requireAdmin(ctx))) return;
+    const raw = ctx.match?.toString().trim() ?? '';
+    const { ids } = takeLeadingIds(raw.split(/\s+/).filter(Boolean));
+    const label = inboundOnly
+      ? 'readonly (chỉ Zalo→Telegram)'
+      : 'twoway (bật reply Telegram→Zalo)';
+
+    if (ids.length > 0) {
+      const lines: string[] = [];
+      let ok = 0;
+      let fail = 0;
+      for (const id of ids) {
+        const updated = editCustomer(id, adapter.mode, { inboundOnly });
+        if (!updated) {
+          fail += 1;
+          lines.push(`✗ không tìm thấy: ${id}`);
+          continue;
+        }
+        ok += 1;
+        lines.push(`~ ${updated.displayName ?? '—'} id=${updated.zaloUserId}`);
+      }
+      await replyChunks(
+        ctx,
+        [`✅ ${label}: ok=${ok} fail=${fail}`, ...lines].join('\n'),
+      );
+      return;
+    }
+
+    const topicId = ctx.message?.message_thread_id;
+    if (!topicId) {
+      await ctx.reply(
+        inboundOnly
+          ? 'Dùng /readonly trong topic hoặc /readonly <id1>,<id2>'
+          : 'Dùng /twoway trong topic hoặc /twoway <id1>,<id2>',
+      );
+      return;
+    }
+    const customer = inboundOnlyByTopic(topicId, adapter.mode, inboundOnly);
+    if (!customer) {
+      await ctx.reply('Không tìm thấy khách cho topic này.');
+      return;
+    }
+    await ctx.reply(
+      `Đã bật ${label}: ${customer.displayName ?? customer.zaloUserId}`,
+    );
+  }
+
+  bot.command(['readonly', 'ro', 'oneway', '1way'], async (ctx) => {
+    await setInboundOnlyCommand(ctx, true);
+  });
+
+  bot.command(['twoway', 'readwrite', 'rw'], async (ctx) => {
+    await setInboundOnlyCommand(ctx, false);
   });
 
   bot.command('unmute', async (ctx) => {

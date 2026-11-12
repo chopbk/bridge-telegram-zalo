@@ -10,6 +10,7 @@ import {
   listCustomersPage,
   searchCustomers,
   setBlockedByTopic,
+  setInboundOnlyByTopic,
   setMutedByTopic,
   setSubscriptionStatus,
   setSubscriptionStatusByTopic,
@@ -66,6 +67,7 @@ async function createTopicAndInsert(
     displayName: displayName ?? null,
     subscriptionStatus,
     threadKind,
+    inboundOnly: false,
   });
 
   if (!inserted) {
@@ -167,6 +169,14 @@ export function blockByTopic(
   return setBlockedByTopic(topicId, provider, blocked);
 }
 
+export function inboundOnlyByTopic(
+  topicId: number,
+  provider: ZaloMode,
+  inboundOnly: boolean,
+): Customer | null {
+  return setInboundOnlyByTopic(topicId, provider, inboundOnly);
+}
+
 export function setStatusByTopic(
   topicId: number,
   provider: ZaloMode,
@@ -197,7 +207,9 @@ export async function addAllowedCustomer(
   zaloUserId: string,
   displayName?: string,
   threadKind: 'user' | 'group' = 'user',
+  opts?: { inboundOnly?: boolean },
 ): Promise<{ customer: Customer; created: boolean }> {
+  const inboundOnly = opts?.inboundOnly ?? false;
   const existing = findByZaloUserId(zaloUserId, provider);
   if (existing) {
     const updated =
@@ -205,6 +217,7 @@ export async function addAllowedCustomer(
         subscriptionStatus: 'approved',
         blocked: false,
         threadKind,
+        inboundOnly,
         ...(displayName ? { displayName } : {}),
       }) ?? existing;
     return { customer: updated, created: false };
@@ -218,6 +231,11 @@ export async function addAllowedCustomer(
     'approved',
     threadKind,
   );
+  if (inboundOnly) {
+    const updated =
+      updateCustomer(zaloUserId, provider, { inboundOnly: true }) ?? customer;
+    return { customer: updated, created: true };
+  }
   return { customer, created: true };
 }
 

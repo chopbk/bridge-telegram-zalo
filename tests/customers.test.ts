@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { resetEnvCache } from '../src/config/env.js';
 import { closeDb, getDb } from '../src/db/client.js';
 import {
+  canAdminReply,
   deleteCustomer,
   findByTopicId,
   findByZaloUserId,
@@ -171,5 +172,22 @@ describe('customers db', () => {
     expect(c.threadKind).toBe('group');
     const patched = updateCustomer('g1', 'personal', { threadKind: 'user' });
     expect(patched?.threadKind).toBe('user');
+  });
+
+  it('inbound_only blocks admin reply but still allows broadcast', () => {
+    const c = insertCustomer({
+      zaloUserId: 'u-ro',
+      telegramTopicId: 77,
+      provider: 'personal',
+      subscriptionStatus: 'approved',
+      inboundOnly: true,
+    });
+    expect(c.inboundOnly).toBe(true);
+    expect(canAdminReply(c)).toBe(false);
+    expect(listBroadcastTargets('personal')).toHaveLength(1);
+
+    const twoWay = updateCustomer('u-ro', 'personal', { inboundOnly: false });
+    expect(twoWay?.inboundOnly).toBe(false);
+    expect(canAdminReply(twoWay!)).toBe(true);
   });
 });

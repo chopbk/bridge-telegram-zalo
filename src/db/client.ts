@@ -13,6 +13,8 @@ export type CustomerRow = {
   display_name: string | null;
   muted: number;
   blocked: number;
+  /** 1 = chỉ Zalo→Telegram, không reply Telegram→Zalo */
+  inbound_only: number;
   subscription_status: SubscriptionStatus;
   topic_missing: number;
   thread_kind: ThreadKind;
@@ -85,6 +87,16 @@ function migrate(database: AppDatabase): void {
     database
       .prepare(
         `INSERT INTO schema_meta (key, value) VALUES ('version', '4')
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      )
+      .run();
+  }
+
+  if (version < 5) {
+    migrateToV5(database);
+    database
+      .prepare(
+        `INSERT INTO schema_meta (key, value) VALUES ('version', '5')
          ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
       )
       .run();
@@ -217,6 +229,7 @@ function createCustomersV2(database: AppDatabase): void {
       display_name TEXT,
       muted INTEGER NOT NULL DEFAULT 0,
       blocked INTEGER NOT NULL DEFAULT 0,
+      inbound_only INTEGER NOT NULL DEFAULT 0,
       subscription_status TEXT NOT NULL DEFAULT 'pending'
         CHECK (subscription_status IN ('pending', 'approved', 'rejected', 'unsubscribed')),
       topic_missing INTEGER NOT NULL DEFAULT 0,
@@ -260,6 +273,18 @@ function migrateToV4(database: AppDatabase): void {
     CREATE INDEX IF NOT EXISTS idx_thread_activity_recent
       ON thread_activity(provider, thread_kind, last_active_at DESC);
   `);
+}
+
+function migrateToV5(database: AppDatabase): void {
+  if (!tableExists(database, 'customers')) {
+    createCustomersV2(database);
+  }
+  const cols = columnNames(database, 'customers');
+  if (!cols.has('inbound_only')) {
+    database.exec(
+      `ALTER TABLE customers ADD COLUMN inbound_only INTEGER NOT NULL DEFAULT 0`,
+    );
+  }
 }
 
 export function closeDb(): void {

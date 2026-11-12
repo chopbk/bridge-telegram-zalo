@@ -108,9 +108,15 @@ function requireReceivableCustomer(adapter: ZaloAdapter, topicId: number) {
         zaloUserId: customer.zaloUserId,
         status: customer.subscriptionStatus,
         blocked: customer.blocked,
+        inboundOnly: customer.inboundOnly,
       },
       'Customer not receivable for reply — skip',
     );
+    if (customer.inboundOnly) {
+      throw new Error(
+        'Topic đang chế độ chỉ đọc (Zalo→Telegram). Dùng /twoway để bật lại reply sang Zalo.',
+      );
+    }
     throw new Error(
       `Khách chưa đủ điều kiện nhận tin (status=${customer.subscriptionStatus}, blocked=${customer.blocked})`,
     );

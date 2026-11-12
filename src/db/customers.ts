@@ -13,6 +13,8 @@ export type Customer = {
   displayName: string | null;
   muted: boolean;
   blocked: boolean;
+  /** Chỉ forward Zalo→Telegram; tắt reply Telegram→Zalo */
+  inboundOnly: boolean;
   subscriptionStatus: SubscriptionStatus;
   topicMissing: boolean;
   threadKind: ThreadKind;
@@ -28,7 +30,7 @@ export function isReceivable(c: Customer): boolean {
 }
 
 export function canAdminReply(c: Customer): boolean {
-  return c.subscriptionStatus === 'approved' && !c.blocked;
+  return c.subscriptionStatus === 'approved' && !c.blocked && !c.inboundOnly;
 }
 
 function mapRow(row: CustomerRow): Customer {
@@ -39,6 +41,7 @@ function mapRow(row: CustomerRow): Customer {
     displayName: row.display_name,
     muted: row.muted === 1,
     blocked: row.blocked === 1,
+    inboundOnly: row.inbound_only === 1,
     subscriptionStatus: row.subscription_status,
     topicMissing: row.topic_missing === 1,
     threadKind: row.thread_kind === 'group' ? 'group' : 'user',
@@ -180,22 +183,25 @@ export function insertCustomer(input: {
   displayName?: string | null;
   subscriptionStatus?: SubscriptionStatus;
   threadKind?: ThreadKind;
+  inboundOnly?: boolean;
 }): Customer {
   const now = new Date().toISOString();
   const status = input.subscriptionStatus ?? 'pending';
   const threadKind = input.threadKind ?? 'user';
+  const inboundOnly = input.inboundOnly ? 1 : 0;
   getDb()
     .prepare(
       `INSERT INTO customers
         (provider, zalo_user_id, telegram_topic_id, display_name, muted, blocked,
-         subscription_status, topic_missing, thread_kind, created_at, updated_at)
-       VALUES (?, ?, ?, ?, 0, 0, ?, 0, ?, ?, ?)`,
+         inbound_only, subscription_status, topic_missing, thread_kind, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 0, 0, ?, ?, 0, ?, ?, ?)`,
     )
     .run(
       input.provider,
       input.zaloUserId,
       input.telegramTopicId,
       input.displayName ?? null,
+      inboundOnly,
       status,
       threadKind,
       now,
@@ -212,6 +218,7 @@ export function tryInsertCustomer(input: {
   displayName?: string | null;
   subscriptionStatus?: SubscriptionStatus;
   threadKind?: ThreadKind;
+  inboundOnly?: boolean;
 }): { customer: Customer; inserted: boolean } {
   const existing = findByZaloUserId(input.zaloUserId, input.provider);
   if (existing) return { customer: existing, inserted: false };
@@ -274,6 +281,31 @@ export function setBlockedByTopic(
   const customer = findByTopicId(topicId, provider);
   if (!customer) return null;
   return setBlocked(customer.zaloUserId, provider, blocked);
+}
+
+export function setInboundOnly(
+  zaloUserId: string,
+  provider: ZaloMode,
+  inboundOnly: boolean,
+): Customer | null {
+  const now = new Date().toISOString();
+  const result = getDb()
+    .prepare(
+      'UPDATE customers SET inbound_only = ?, updated_at = ? WHERE zalo_user_id = ? AND provider = ?',
+    )
+    .run(inboundOnly ? 1 : 0, now, zaloUserId, provider) as { changes: number };
+  if (result.changes === 0) return null;
+  return findByZaloUserId(zaloUserId, provider);
+}
+
+export function setInboundOnlyByTopic(
+  topicId: number,
+  provider: ZaloMode,
+  inboundOnly: boolean,
+): Customer | null {
+  const customer = findByTopicId(topicId, provider);
+  if (!customer) return null;
+  return setInboundOnly(customer.zaloUserId, provider, inboundOnly);
 }
 
 export function setSubscriptionStatus(
@@ -359,6 +391,7 @@ export type CustomerPatch = {
   subscriptionStatus?: SubscriptionStatus;
   muted?: boolean;
   blocked?: boolean;
+  inboundOnly?: boolean;
   threadKind?: ThreadKind;
 };
 
@@ -377,16 +410,34 @@ export function updateCustomer(
   const muted = patch.muted !== undefined ? (patch.muted ? 1 : 0) : existing.muted ? 1 : 0;
   const blocked =
     patch.blocked !== undefined ? (patch.blocked ? 1 : 0) : existing.blocked ? 1 : 0;
+  const inboundOnly =
+    patch.inboundOnly !== undefined
+      ? patch.inboundOnly
+        ? 1
+        : 0
+      : existing.inboundOnly
+        ? 1
+        : 0;
   const threadKind = patch.threadKind ?? existing.threadKind;
 
   getDb()
     .prepare(
       `UPDATE customers
        SET display_name = ?, subscription_status = ?, muted = ?, blocked = ?,
-           thread_kind = ?, updated_at = ?
+           inbound_only = ?, thread_kind = ?, updated_at = ?
        WHERE zalo_user_id = ? AND provider = ?`,
     )
-    .run(displayName, status, muted, blocked, threadKind, now, zaloUserId, provider);
+    .run(
+      displayName,
+      status,
+      muted,
+      blocked,
+      inboundOnly,
+      threadKind,
+      now,
+      zaloUserId,
+      provider,
+    );
 
   return findByZaloUserId(zaloUserId, provider);
 }
@@ -400,6 +451,7 @@ export function formatCustomerDetail(c: Customer): string {
     `status: ${c.subscriptionStatus}`,
     `muted: ${c.muted ? 'yes' : 'no'}`,
     `blocked: ${c.blocked ? 'yes' : 'no'}`,
+    `inbound_only: ${c.inboundOnly ? 'yes (Zalo→TG only)' : 'no'}`,
     `topic_missing: ${c.topicMissing ? 'yes' : 'no'}`,
     `provider: ${c.provider}`,
     `created: ${c.createdAt}`,
