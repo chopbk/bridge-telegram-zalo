@@ -24,7 +24,7 @@ const baseSchema = z.object({
   ZALO_SEND_MAX_PER_MINUTE: z.coerce.number().int().nonnegative().default(20),
   JOB_MAX_RETRIES: z.coerce.number().int().positive().default(3),
   LIST_PAGE_SIZE: z.coerce.number().int().positive().default(20),
-  /** Chữ ký mặc định dưới tin chuyển tiếp (để trống = tắt). Ghi đè bằng /signature */
+  /** Chữ ký mặc định khi broadcast channel→Zalo (để trống = tắt). Ghi đè bằng /signature */
   FORWARD_SIGNATURE: z.string().optional().default(''),
 });
 

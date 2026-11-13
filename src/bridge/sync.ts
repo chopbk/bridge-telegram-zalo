@@ -7,7 +7,6 @@ import {
   updateMessageLinkZaloIds,
   type MessageLink,
 } from '../db/message-links.js';
-import { appendSignaturePlain } from '../db/settings.js';
 import type { NormalizedUndo, ZaloAdapter } from '../zalo/types.js';
 import {
   telegramEntitiesToZaloStyles,
@@ -183,8 +182,7 @@ export async function syncTelegramEditToZalo(
     return { ok: false, reason: 'not-outbound' };
   }
 
-  const text = appendSignaturePlain(newText);
-  if (link.bodyText != null && link.bodyText === text) {
+  if (link.bodyText != null && link.bodyText === newText) {
     return { ok: true };
   }
 
@@ -205,10 +203,9 @@ export async function syncTelegramEditToZalo(
     }
   }
 
-  // Style theo text gốc (trước chữ ký) để offset entity không lệch
   const styles = telegramEntitiesToZaloStyles(newText, entities);
   try {
-    const result = await adapter.sendText(link.zaloThreadId, text, {
+    const result = await adapter.sendText(link.zaloThreadId, newText, {
       threadKind: link.threadKind,
       styles: styles.length ? styles : undefined,
     });
@@ -218,7 +215,7 @@ export async function syncTelegramEditToZalo(
       messageId,
       result.messageId,
       result.cliMsgId ?? null,
-      text,
+      newText,
     );
     logger.info(
       {

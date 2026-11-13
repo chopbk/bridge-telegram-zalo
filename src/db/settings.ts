@@ -33,7 +33,7 @@ export type SignatureConfig = {
   text: string;
 };
 
-/** Chữ ký dưới tin chuyển tiếp: DB ghi đè env FORWARD_SIGNATURE. */
+/** Chữ ký chỉ cho broadcast channel→Zalo. DB ghi đè env FORWARD_SIGNATURE. */
 export function getSignatureConfig(): SignatureConfig {
   const envDefault = (getEnv().FORWARD_SIGNATURE ?? '').trim();
   const storedText = getSetting(KEY_SIGNATURE_TEXT);

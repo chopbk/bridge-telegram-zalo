@@ -13,6 +13,7 @@ import {
   requeueFailedBroadcastItems,
   type BroadcastItemPayload,
 } from '../db/jobs.js';
+import { appendSignaturePlain } from '../db/settings.js';
 import { notifyAdmins } from '../telegram/notify.js';
 import type { ZaloAdapter, ZaloImageAttachment } from '../zalo/types.js';
 import { bufferToZaloImage, downloadToBuffer, telegramFileUrl } from './media.js';
@@ -94,8 +95,11 @@ async function enqueueAndDrainBroadcast(
     }
   }
 
+  // Chữ ký chỉ áp dụng channel → Zalo (không dùng trong topic)
+  const textWithSig = appendSignaturePlain(opts.text);
+
   const { parentId } = createBroadcastJob({
-    text: opts.text,
+    text: textWithSig,
     provider: adapter.mode,
     channelMessageId: opts.channelMessageId,
     imageFileIds: opts.imageFileIds,

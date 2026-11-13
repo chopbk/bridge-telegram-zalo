@@ -230,12 +230,12 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
         '/mute      /unmute     (tắt/bật nhận broadcast)',
         '/readonly  /twoway     (chỉ Zalo→TG / bật lại 2 chiều)',
         '',
-        '▸ Chữ ký / đồng bộ tin',
-        '/signature           xem chữ ký dưới tin forward',
+        '▸ Chữ ký channel / đồng bộ tin topic',
+        '/signature           chữ ký chỉ khi broadcast channel→Zalo',
         '/signature set <chữ> bật + đặt chữ ký',
         '/signature on|off    bật/tắt',
-        '/del                 reply tin → xoá/thu hồi 2 phía',
-        '(Sửa tin TG đã gửi → tự sync Zalo; thu hồi Zalo → xoá TG)',
+        '/del                 reply tin topic → xoá/thu hồi 2 phía',
+        '(Sửa tin TG topic → sync Zalo; thu hồi Zalo → xoá TG)',
         '',
         '▸ Hệ thống',
         '/status              thống kê nhanh',
@@ -973,8 +973,8 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
       const cfg = getSignatureConfig();
       await ctx.reply(
         cfg.enabled
-          ? `Chữ ký đang BẬT:\n— ${cfg.text}\n\nTắt: /signature off\nĐổi: /signature set <chữ>`
-          : `Chữ ký đang TẮT.${cfg.text ? `\nText đã lưu: — ${cfg.text}` : ''}\n\nBật: /signature set <chữ> hoặc /signature on`,
+          ? `Chữ ký channel→Zalo đang BẬT:\n— ${cfg.text}\n(Topic không thêm chữ ký)\n\nTắt: /signature off\nĐổi: /signature set <chữ>`
+          : `Chữ ký channel→Zalo đang TẮT.${cfg.text ? `\nText đã lưu: — ${cfg.text}` : ''}\n\nBật: /signature set <chữ> hoặc /signature on`,
       );
       return;
     }

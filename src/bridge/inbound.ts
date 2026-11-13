@@ -8,7 +8,6 @@ import {
 } from '../db/customers.js';
 import { upsertMessageLink } from '../db/message-links.js';
 import { claimProcessedMessage } from '../db/processed.js';
-import { appendSignatureHtml } from '../db/settings.js';
 import type { NormalizedInbound, ZaloAdapter } from '../zalo/types.js';
 import { zaloStylesToTelegramHtml } from './format.js';
 import { getOrCreateTopic, markTopicMissing } from './mapper.js';
@@ -47,13 +46,12 @@ function formatInboundHtml(
   msg: NormalizedInbound,
   statusPrefix: string,
   body: string,
-  withSignature = true,
 ): string {
   const prefix = inboundPrefix(msg, statusPrefix);
-  const html =
+  return (
     zaloStylesToTelegramHtml(prefix, []) +
-    zaloStylesToTelegramHtml(body, msg.styles ?? []);
-  return withSignature ? appendSignatureHtml(html) : html;
+    zaloStylesToTelegramHtml(body, msg.styles ?? [])
+  );
 }
 
 function rememberZ2tLink(

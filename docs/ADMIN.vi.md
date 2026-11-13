@@ -114,14 +114,16 @@ Nhiều id cùng lúc: **cách nhau bởi dấu phẩy** `,`.
 
 Trong topic: `/approve` · `/reject` · `/block` · `/unblock` · `/mute` · `/unmute` · `/readonly` · `/twoway`
 
-### Chữ ký & đồng bộ xoá/sửa
+### Chữ ký channel & đồng bộ xoá/sửa topic
 
 | Lệnh | Ý nghĩa |
 |------|---------|
-| `/signature` | Xem chữ ký dưới tin chuyển tiếp |
-| `/signature set <chữ>` | Bật + đặt chữ ký (hiện `— chữ` dưới mỗi tin forward) |
+| `/signature` | Xem chữ ký (chỉ khi **broadcast channel → Zalo**) |
+| `/signature set <chữ>` | Bật + đặt chữ ký (`— chữ` dưới tin channel gửi Zalo) |
 | `/signature on` / `off` | Bật / tắt (giữ text đã lưu) |
 | `/del` (reply) | Xoá tin trên Telegram **và** thu hồi tin Zalo tương ứng |
+
+Topic (Zalo↔Telegram) **không** thêm chữ ký.
 
 Đồng bộ tự động:
 
