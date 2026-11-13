@@ -4,6 +4,7 @@ import logger from './config/logger.js';
 import { getDb } from './db/client.js';
 import { createZaloAdapter } from './zalo/factory.js';
 import { wireInbound } from './bridge/inbound.js';
+import { wireZaloUndoSync } from './bridge/sync.js';
 import { resumePendingBroadcasts } from './bridge/broadcast.js';
 import { createTelegramBot, startTelegramBot } from './telegram/bot.js';
 import { setNotifyApi } from './telegram/notify.js';
@@ -17,6 +18,7 @@ async function main(): Promise<void> {
   setNotifyApi(telegramBot.api);
 
   wireInbound(telegramBot.api, adapter);
+  wireZaloUndoSync(telegramBot.api, adapter);
   await adapter.start();
 
   // Resume persisted broadcast jobs after restart

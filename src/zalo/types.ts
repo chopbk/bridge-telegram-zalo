@@ -20,6 +20,10 @@ export type NormalizedInbound = {
   /** Tên hiển thị thread (user name hoặc group name nếu biết) */
   displayName?: string;
   messageId?: string;
+  /** Client msg id — cần để thu hồi tin của mình */
+  cliMsgId?: string;
+  /** uidFrom của tin gốc */
+  uidFrom?: string;
   /** Photo(s) from Zalo — prefer over unsupportedKind */
   images?: InboundImage[];
   /** Non-text inbound (file, voice, …) when images not extracted */
@@ -32,6 +36,25 @@ export type NormalizedInbound = {
 
 export type ZaloSendResult = {
   messageId: string;
+  /** Cần cho api.undo — có thể đến sau qua echo isSelf */
+  cliMsgId?: string;
+};
+
+/** Sự kiện thu hồi tin trên Zalo */
+export type NormalizedUndo = {
+  zaloThreadId: string;
+  threadKind: ZaloThreadKind;
+  /** msgId của tin bị thu hồi */
+  targetMsgId: string;
+  targetCliMsgId?: string;
+  isSelf?: boolean;
+};
+
+export type UndoMessageParams = {
+  msgId: string;
+  cliMsgId: string;
+  threadId: string;
+  threadKind?: ZaloThreadKind;
 };
 
 export type ZaloThreadKind = 'user' | 'group';
@@ -89,6 +112,10 @@ export interface ZaloAdapter {
     opts?: SendImagesOptions,
   ): Promise<ZaloSendResult>;
   onInbound(handler: (msg: NormalizedInbound) => void | Promise<void>): void;
+  /** Personal: lắng nghe thu hồi tin */
+  onUndo?(handler: (undo: NormalizedUndo) => void | Promise<void>): void;
+  /** Personal: thu hồi tin đã gửi (cần msgId + cliMsgId) */
+  undoMessage?(params: UndoMessageParams): Promise<void>;
   /** Personal: danh sách bạn bè Zalo. Bot: có thể không hỗ trợ. */
   listContacts?(): Promise<ZaloContact[]>;
   /** Personal: chat gần đây (1-1 + group), sắp theo hoạt động thật. */

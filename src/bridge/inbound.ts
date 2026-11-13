@@ -6,7 +6,9 @@ import {
   setSubscriptionStatus,
   type Customer,
 } from '../db/customers.js';
+import { upsertMessageLink } from '../db/message-links.js';
 import { claimProcessedMessage } from '../db/processed.js';
+import { appendSignatureHtml } from '../db/settings.js';
 import type { NormalizedInbound, ZaloAdapter } from '../zalo/types.js';
 import { zaloStylesToTelegramHtml } from './format.js';
 import { getOrCreateTopic, markTopicMissing } from './mapper.js';
@@ -41,12 +43,44 @@ function inboundPrefix(msg: NormalizedInbound, statusPrefix: string): string {
 }
 
 /** HTML giữ bold/italic/… từ Zalo; prefix (Bạn:/tên) luôn plain. */
-function formatInboundHtml(msg: NormalizedInbound, statusPrefix: string, body: string): string {
+function formatInboundHtml(
+  msg: NormalizedInbound,
+  statusPrefix: string,
+  body: string,
+  withSignature = true,
+): string {
   const prefix = inboundPrefix(msg, statusPrefix);
-  return (
+  const html =
     zaloStylesToTelegramHtml(prefix, []) +
-    zaloStylesToTelegramHtml(body, msg.styles ?? [])
-  );
+    zaloStylesToTelegramHtml(body, msg.styles ?? []);
+  return withSignature ? appendSignatureHtml(html) : html;
+}
+
+function rememberZ2tLink(
+  adapter: ZaloAdapter,
+  msg: NormalizedInbound,
+  customer: Customer,
+  telegramMessageId: number,
+  bodyText?: string,
+): void {
+  if (!msg.messageId || msg.messageId === 'ok') return;
+  try {
+    upsertMessageLink({
+      provider: adapter.mode,
+      direction: 'z2t',
+      zaloMsgId: msg.messageId,
+      zaloCliMsgId: msg.cliMsgId ?? null,
+      zaloUidFrom: msg.uidFrom ?? msg.senderId ?? null,
+      zaloThreadId: customer.zaloUserId,
+      threadKind: customer.threadKind,
+      telegramChatId: getEnv().telegramForumGroupId,
+      telegramMessageId,
+      telegramTopicId: customer.telegramTopicId,
+      bodyText: bodyText ?? msg.text ?? null,
+    });
+  } catch (err) {
+    logger.warn({ err, messageId: msg.messageId }, 'Failed to store z2t message link');
+  }
 }
 
 async function handleInbound(
@@ -162,18 +196,21 @@ async function handleInbound(
     const captionBody = text || (isGroup ? '(ảnh)' : '');
     const caption =
       formatInboundHtml(msg, statusPrefix, captionBody).trim() || undefined;
-    await sendPhotosToTopicSafe(
+    const sent = await sendPhotosToTopicSafe(
       api,
       customer,
       msg.images.map((i) => i.url),
       caption,
       Boolean(caption),
     );
+    if (sent != null) {
+      rememberZ2tLink(adapter, msg, customer, sent, captionBody);
+    }
     return;
   }
 
   if (msg.unsupportedKind) {
-    await sendToTopicSafe(
+    const sent = await sendToTopicSafe(
       api,
       customer,
       formatInboundHtml(
@@ -184,6 +221,9 @@ async function handleInbound(
       ),
       true,
     );
+    if (sent != null) {
+      rememberZ2tLink(adapter, msg, customer, sent);
+    }
     return;
   }
 
@@ -209,23 +249,27 @@ async function handleInbound(
     return;
   }
 
-  await sendToTopicSafe(
+  const sent = await sendToTopicSafe(
     api,
     customer,
     formatInboundHtml(msg, statusPrefix, text),
     true,
   );
+  if (sent != null) {
+    rememberZ2tLink(adapter, msg, customer, sent, text);
+  }
 }
 
+/** @returns telegram message_id nếu gửi thành công */
 async function sendToTopicSafe(
   api: Api,
   customer: Customer,
   text: string,
   asHtml = false,
-): Promise<void> {
+): Promise<number | null> {
   const env = getEnv();
   try {
-    await api.sendMessage(env.telegramForumGroupId, text, {
+    const sent = await api.sendMessage(env.telegramForumGroupId, text, {
       message_thread_id: customer.telegramTopicId,
       ...(asHtml ? { parse_mode: 'HTML' as const } : {}),
     });
@@ -234,22 +278,25 @@ async function sendToTopicSafe(
         zaloUserId: customer.zaloUserId,
         topicId: customer.telegramTopicId,
         threadKind: customer.threadKind,
+        telegramMessageId: sent.message_id,
       },
       'Forwarded Zalo → Telegram topic',
     );
+    return sent.message_id;
   } catch (err) {
     handleTopicSendError(err, customer);
     throw err;
   }
 }
 
+/** @returns telegram message_id của ảnh đầu (để map xoá/sửa) */
 async function sendPhotosToTopicSafe(
   api: Api,
   customer: Customer,
   urls: string[],
   caption?: string,
   captionAsHtml = false,
-): Promise<void> {
+): Promise<number | null> {
   const env = getEnv();
   const chatId = env.telegramForumGroupId;
   const threadId = customer.telegramTopicId;
@@ -267,7 +314,7 @@ async function sendPhotosToTopicSafe(
     }
 
     if (buffers.length === 0) {
-      await api.sendMessage(
+      const sent = await api.sendMessage(
         chatId,
         [
           caption ? `${caption}\n` : '',
@@ -276,15 +323,17 @@ async function sendPhotosToTopicSafe(
         ].join('\n'),
         { message_thread_id: threadId },
       );
-      return;
+      return sent.message_id;
     }
 
+    let firstMessageId: number | null = null;
     if (buffers.length === 1) {
-      await api.sendPhoto(chatId, new InputFile(buffers[0]!, 'zalo-photo.jpg'), {
+      const sent = await api.sendPhoto(chatId, new InputFile(buffers[0]!, 'zalo-photo.jpg'), {
         message_thread_id: threadId,
         caption: caption || undefined,
         ...(caption && captionAsHtml ? { parse_mode: 'HTML' as const } : {}),
       });
+      firstMessageId = sent.message_id;
     } else {
       const media = buffers.map((buf, i) => ({
         type: 'photo' as const,
@@ -296,9 +345,10 @@ async function sendPhotosToTopicSafe(
             }
           : {}),
       }));
-      await api.sendMediaGroup(chatId, media, {
+      const sent = await api.sendMediaGroup(chatId, media, {
         message_thread_id: threadId,
       });
+      firstMessageId = sent[0]?.message_id ?? null;
     }
 
     if (failedUrls.length > 0) {
@@ -315,9 +365,11 @@ async function sendPhotosToTopicSafe(
         topicId: threadId,
         photoCount: buffers.length,
         failed: failedUrls.length,
+        telegramMessageId: firstMessageId,
       },
       'Forwarded Zalo photo(s) → Telegram topic',
     );
+    return firstMessageId;
   } catch (err) {
     handleTopicSendError(err, customer);
     throw err;

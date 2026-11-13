@@ -1,11 +1,19 @@
+import { getEnv } from '../config/env.js';
 import logger from '../config/logger.js';
 import { canAdminReply } from '../db/customers.js';
+import { upsertMessageLink } from '../db/message-links.js';
+import { appendSignaturePlain } from '../db/settings.js';
 import type { ZaloAdapter, ZaloImageAttachment } from '../zalo/types.js';
 import {
   telegramEntitiesToZaloStyles,
   type TelegramEntityLike,
 } from './format.js';
 import { customerByTopic } from './mapper.js';
+
+export type OutboundMeta = {
+  telegramMessageId: number;
+  telegramTopicId: number;
+};
 
 /**
  * Luồng B: Telegram topic → Zalo (text)
@@ -15,15 +23,36 @@ export async function forwardTopicToZalo(
   topicId: number,
   text: string,
   entities?: TelegramEntityLike[],
+  meta?: OutboundMeta,
 ): Promise<void> {
   const customer = requireReceivableCustomer(adapter, topicId);
+  const body = appendSignaturePlain(text);
+  // Entities chỉ khớp text gốc — chữ ký plain ở cuối không lệch style phần đầu
   const styles = telegramEntitiesToZaloStyles(text, entities);
 
   try {
-    const result = await adapter.sendText(customer.zaloUserId, text, {
+    const result = await adapter.sendText(customer.zaloUserId, body, {
       threadKind: customer.threadKind,
       styles: styles.length ? styles : undefined,
     });
+    if (meta && result.messageId && result.messageId !== 'ok') {
+      try {
+        upsertMessageLink({
+          provider: adapter.mode,
+          direction: 't2z',
+          zaloMsgId: result.messageId,
+          zaloCliMsgId: result.cliMsgId ?? null,
+          zaloThreadId: customer.zaloUserId,
+          threadKind: customer.threadKind,
+          telegramChatId: getEnv().telegramForumGroupId,
+          telegramMessageId: meta.telegramMessageId,
+          telegramTopicId: meta.telegramTopicId,
+          bodyText: body,
+        });
+      } catch (err) {
+        logger.warn({ err, messageId: result.messageId }, 'Failed to store t2z message link');
+      }
+    }
     logger.info(
       {
         topicId,
@@ -52,6 +81,7 @@ export async function forwardTopicImagesToZalo(
   images: ZaloImageAttachment[],
   caption?: string,
   captionEntities?: TelegramEntityLike[],
+  meta?: OutboundMeta,
 ): Promise<void> {
   const customer = requireReceivableCustomer(adapter, topicId);
 
@@ -62,14 +92,34 @@ export async function forwardTopicImagesToZalo(
     throw new Error('Không có ảnh để gửi');
   }
 
+  const captionBody =
+    caption != null && caption.length > 0 ? appendSignaturePlain(caption) : caption;
   const styles = telegramEntitiesToZaloStyles(caption ?? '', captionEntities);
 
   try {
     const result = await adapter.sendImages(customer.zaloUserId, images, {
       threadKind: customer.threadKind,
-      caption,
+      caption: captionBody,
       styles: styles.length ? styles : undefined,
     });
+    if (meta && result.messageId && result.messageId !== 'ok') {
+      try {
+        upsertMessageLink({
+          provider: adapter.mode,
+          direction: 't2z',
+          zaloMsgId: result.messageId,
+          zaloCliMsgId: result.cliMsgId ?? null,
+          zaloThreadId: customer.zaloUserId,
+          threadKind: customer.threadKind,
+          telegramChatId: getEnv().telegramForumGroupId,
+          telegramMessageId: meta.telegramMessageId,
+          telegramTopicId: meta.telegramTopicId,
+          bodyText: captionBody ?? null,
+        });
+      } catch (err) {
+        logger.warn({ err, messageId: result.messageId }, 'Failed to store t2z photo link');
+      }
+    }
     logger.info(
       {
         topicId,

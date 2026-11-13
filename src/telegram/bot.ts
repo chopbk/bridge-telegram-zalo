@@ -25,11 +25,20 @@ import {
   retryBroadcast,
 } from '../bridge/broadcast.js';
 import {
+  syncTelegramDeleteToZalo,
+  syncTelegramEditToZalo,
+} from '../bridge/sync.js';
+import {
   countByStatus,
   formatCustomerDetail,
   type Customer,
 } from '../db/customers.js';
 import type { SubscriptionStatus } from '../db/client.js';
+import {
+  getSignatureConfig,
+  setSignatureEnabled,
+  setSignatureText,
+} from '../db/settings.js';
 import type { ZaloAdapter, ZaloImageAttachment } from '../zalo/types.js';
 import { buildConfigReport } from './config-report.js';
 import { notifyAdmins } from './notify.js';
@@ -40,6 +49,7 @@ type PendingAlbum = {
   caption?: string;
   captionEntities?: Array<{ type: string; offset: number; length: number; url?: string }>;
   fileIds: string[];
+  telegramMessageId?: number;
   timer?: ReturnType<typeof setTimeout>;
 };
 const pendingAlbums = new Map<string, PendingAlbum>();
@@ -219,6 +229,13 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
         '/block     /unblock',
         '/mute      /unmute     (tắt/bật nhận broadcast)',
         '/readonly  /twoway     (chỉ Zalo→TG / bật lại 2 chiều)',
+        '',
+        '▸ Chữ ký / đồng bộ tin',
+        '/signature           xem chữ ký dưới tin forward',
+        '/signature set <chữ> bật + đặt chữ ký',
+        '/signature on|off    bật/tắt',
+        '/del                 reply tin → xoá/thu hồi 2 phía',
+        '(Sửa tin TG đã gửi → tự sync Zalo; thu hồi Zalo → xoá TG)',
         '',
         '▸ Hệ thống',
         '/status              thống kê nhanh',
@@ -949,6 +966,76 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
     }
   });
 
+  bot.command(['signature', 'sig'], async (ctx) => {
+    if (!(await requireAdmin(ctx))) return;
+    const raw = (ctx.match ?? '').toString().trim();
+    if (!raw) {
+      const cfg = getSignatureConfig();
+      await ctx.reply(
+        cfg.enabled
+          ? `Chữ ký đang BẬT:\n— ${cfg.text}\n\nTắt: /signature off\nĐổi: /signature set <chữ>`
+          : `Chữ ký đang TẮT.${cfg.text ? `\nText đã lưu: — ${cfg.text}` : ''}\n\nBật: /signature set <chữ> hoặc /signature on`,
+      );
+      return;
+    }
+    const lower = raw.toLowerCase();
+    if (lower === 'off' || lower === 'disable' || lower === '0') {
+      const cfg = setSignatureEnabled(false);
+      await ctx.reply(`Đã tắt chữ ký.${cfg.text ? ` (vẫn lưu: — ${cfg.text})` : ''}`);
+      return;
+    }
+    if (lower === 'on' || lower === 'enable' || lower === '1') {
+      const cfg = setSignatureEnabled(true);
+      if (!cfg.enabled) {
+        await ctx.reply('Chưa có nội dung chữ ký. Dùng: /signature set <chữ>');
+        return;
+      }
+      await ctx.reply(`Đã bật chữ ký:\n— ${cfg.text}`);
+      return;
+    }
+    const setMatch = raw.match(/^(?:set|text)\s+(.+)$/is);
+    const text = setMatch?.[1]?.trim() || (lower.startsWith('set') ? '' : raw);
+    if (!text) {
+      await ctx.reply('Cú pháp: /signature set <chữ ký>');
+      return;
+    }
+    const cfg = setSignatureText(text);
+    await ctx.reply(`Đã đặt chữ ký (bật):\n— ${cfg.text}`);
+  });
+
+  bot.command(['del', 'delete', 'xoá', 'xoa'], async (ctx) => {
+    if (!(await requireAdmin(ctx))) return;
+    if (!inForumGroup(ctx)) {
+      await ctx.reply('Dùng /del trong topic: reply vào tin cần xoá.');
+      return;
+    }
+    const reply = ctx.message?.reply_to_message;
+    if (!reply) {
+      await ctx.reply('Reply vào tin cần xoá rồi gõ /del');
+      return;
+    }
+    const chatId = ctx.chat!.id;
+    const targetId = reply.message_id;
+
+    const result = await syncTelegramDeleteToZalo(adapter, chatId, targetId);
+    try {
+      await ctx.api.deleteMessage(chatId, targetId);
+    } catch (err) {
+      logger.warn({ err, targetId }, 'Failed to delete Telegram message on /del');
+    }
+    try {
+      await ctx.deleteMessage();
+    } catch {
+      // ignore — không xoá được lệnh /del
+    }
+
+    if (!result.ok) {
+      await ctx.reply(`Đã thử xoá TG. Zalo: ${result.reason}`).catch(() => undefined);
+      return;
+    }
+    // Thành công — không spam ack
+  });
+
   bot.command(['retrybroadcast', 'retry_broadcast'], async (ctx) => {
     if (!(await requireAdmin(ctx))) return;
     const idRaw = ctx.match?.toString().trim() ?? '';
@@ -990,11 +1077,39 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
     }
 
     try {
-      await forwardTopicToZalo(adapter, topicId, msg.text, msg.entities);
+      await forwardTopicToZalo(adapter, topicId, msg.text, msg.entities, {
+        telegramMessageId: msg.message_id,
+        telegramTopicId: topicId,
+      });
     } catch (err) {
       logger.error({ err, topicId }, 'Topic→Zalo failed');
       const detail = err instanceof Error ? err.message : 'Gửi Zalo thất bại.';
       await ctx.reply(detail).catch(() => undefined);
+    }
+  });
+
+  bot.on('edited_message:text', async (ctx) => {
+    const msg = ctx.editedMessage;
+    if (!msg?.text) return;
+    if (msg.chat.id !== env.telegramForumGroupId) return;
+    if (!isAdmin(ctx)) return;
+    const topicId = msg.message_thread_id;
+    if (!topicId) return;
+    if (msg.text.startsWith('/')) return;
+
+    const result = await syncTelegramEditToZalo(
+      adapter,
+      msg.chat.id,
+      msg.message_id,
+      msg.text,
+      msg.entities,
+    );
+    if (!result.ok && result.reason !== 'no-link' && result.reason !== 'not-outbound') {
+      logger.warn(
+        { reason: result.reason, messageId: msg.message_id, topicId },
+        'Telegram edit → Zalo sync failed',
+      );
+      await ctx.reply(`Sửa Zalo thất bại: ${result.reason}`).catch(() => undefined);
     }
   });
 
@@ -1017,6 +1132,7 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
     const caption = typeof msg.caption === 'string' ? msg.caption : undefined;
     const captionEntities = msg.caption_entities;
     const groupId = msg.media_group_id;
+    const meta = { telegramMessageId: msg.message_id, telegramTopicId: topicId };
 
     if (!groupId) {
       try {
@@ -1030,6 +1146,7 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
           images,
           caption,
           captionEntities,
+          meta,
         );
       } catch (err) {
         logger.error({ err, topicId }, 'Topic photo→Zalo failed');
@@ -1043,12 +1160,21 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
     const key = `${topicId}:${groupId}`;
     let pending = pendingAlbums.get(key);
     if (!pending) {
-      pending = { topicId, caption, captionEntities, fileIds: [] };
+      pending = {
+        topicId,
+        caption,
+        captionEntities,
+        fileIds: [],
+        telegramMessageId: msg.message_id,
+      };
       pendingAlbums.set(key, pending);
     }
     if (caption && !pending.caption) {
       pending.caption = caption;
       pending.captionEntities = captionEntities;
+    }
+    if (pending.telegramMessageId == null) {
+      pending.telegramMessageId = msg.message_id;
     }
     pending.fileIds.push(largest.file_id);
     if (pending.timer) clearTimeout(pending.timer);
@@ -1181,6 +1307,12 @@ async function flushAlbum(
       images,
       pending.caption,
       pending.captionEntities,
+      pending.telegramMessageId != null
+        ? {
+            telegramMessageId: pending.telegramMessageId,
+            telegramTopicId: pending.topicId,
+          }
+        : undefined,
     );
   } catch (err) {
     logger.error({ err, topicId: pending.topicId, key }, 'Album photo→Zalo failed');
@@ -1213,6 +1345,14 @@ async function flushChannelAlbum(key: string, adapter: ZaloAdapter): Promise<voi
 
 export async function startTelegramBot(bot: Bot): Promise<void> {
   await bot.start({
+    allowed_updates: [
+      'message',
+      'edited_message',
+      'channel_post',
+      'callback_query',
+      'my_chat_member',
+      'chat_member',
+    ],
     onStart: (info) => logger.info({ username: info.username }, 'Telegram bot started (polling)'),
   });
 }

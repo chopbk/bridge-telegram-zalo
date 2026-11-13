@@ -102,6 +102,16 @@ function migrate(database: AppDatabase): void {
       .run();
   }
 
+  if (version < 6) {
+    migrateToV6(database);
+    database
+      .prepare(
+        `INSERT INTO schema_meta (key, value) VALUES ('version', '6')
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      )
+      .run();
+  }
+
   database.exec(`
     CREATE TABLE IF NOT EXISTS processed_messages (
       provider TEXT NOT NULL,
@@ -285,6 +295,39 @@ function migrateToV5(database: AppDatabase): void {
       `ALTER TABLE customers ADD COLUMN inbound_only INTEGER NOT NULL DEFAULT 0`,
     );
   }
+}
+
+function migrateToV6(database: AppDatabase): void {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS message_links (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      provider TEXT NOT NULL CHECK (provider IN ('bot', 'personal')),
+      direction TEXT NOT NULL CHECK (direction IN ('z2t', 't2z')),
+      zalo_msg_id TEXT NOT NULL,
+      zalo_cli_msg_id TEXT,
+      zalo_uid_from TEXT,
+      zalo_thread_id TEXT NOT NULL,
+      thread_kind TEXT NOT NULL CHECK (thread_kind IN ('user', 'group')),
+      telegram_chat_id INTEGER NOT NULL,
+      telegram_message_id INTEGER NOT NULL,
+      telegram_topic_id INTEGER,
+      body_text TEXT,
+      created_at TEXT NOT NULL,
+      UNIQUE (provider, zalo_msg_id),
+      UNIQUE (provider, telegram_chat_id, telegram_message_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_message_links_zalo
+      ON message_links(provider, zalo_msg_id);
+    CREATE INDEX IF NOT EXISTS idx_message_links_tg
+      ON message_links(provider, telegram_chat_id, telegram_message_id);
+  `);
 }
 
 export function closeDb(): void {

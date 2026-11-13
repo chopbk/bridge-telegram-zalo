@@ -114,6 +114,24 @@ Nhiều id cùng lúc: **cách nhau bởi dấu phẩy** `,`.
 
 Trong topic: `/approve` · `/reject` · `/block` · `/unblock` · `/mute` · `/unmute` · `/readonly` · `/twoway`
 
+### Chữ ký & đồng bộ xoá/sửa
+
+| Lệnh | Ý nghĩa |
+|------|---------|
+| `/signature` | Xem chữ ký dưới tin chuyển tiếp |
+| `/signature set <chữ>` | Bật + đặt chữ ký (hiện `— chữ` dưới mỗi tin forward) |
+| `/signature on` / `off` | Bật / tắt (giữ text đã lưu) |
+| `/del` (reply) | Xoá tin trên Telegram **và** thu hồi tin Zalo tương ứng |
+
+Đồng bộ tự động:
+
+- **Thu hồi trên Zalo** → bot xoá tin đã forward trên Telegram.
+- **Sửa tin trên Telegram** (tin admin đã gửi sang Zalo) → thu hồi + gửi lại nội dung mới trên Zalo.
+- Bot API **không** báo khi bạn xoá tin bằng nút Delete trên Telegram → dùng **reply `/del`**.
+- Zalo (zca-js) **không** có API sửa tin; sửa phía Zalo app không sync sang Telegram.
+
+Env mặc định (tuỳ chọn): `FORWARD_SIGNATURE=...` — runtime `/signature` ghi đè.
+
 ### Sự cố
 
 | Lệnh | Khi nào |

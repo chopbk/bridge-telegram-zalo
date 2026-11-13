@@ -71,8 +71,30 @@ declare module 'zca-js' {
   };
 
   export type SendMessageResult = {
-    message?: { msgId?: string | number } | null;
-    attachment?: Array<{ msgId?: string | number }>;
+    message?: { msgId?: string | number; cliMsgId?: string | number } | null;
+    attachment?: Array<{ msgId?: string | number; cliMsgId?: string | number }>;
+  };
+
+  export type UndoPayload = {
+    msgId: string | number;
+    cliMsgId: string | number;
+  };
+
+  export type ZaloUndoEvent = {
+    isSelf?: boolean;
+    isGroup?: boolean;
+    threadId: string;
+    data: {
+      msgId?: string | number;
+      cliMsgId?: string | number;
+      uidFrom?: string | number;
+      idTo?: string | number;
+      content?: {
+        globalMsgId?: string | number;
+        cliMsgId?: string | number;
+        deleteMsg?: number;
+      };
+    };
   };
 
   export type API = {
@@ -81,6 +103,19 @@ declare module 'zca-js' {
       threadId: string,
       type?: ThreadType,
     ) => Promise<SendMessageResult>;
+    undo: (
+      payload: UndoPayload,
+      threadId: string,
+      type?: ThreadType,
+    ) => Promise<{ status?: number }>;
+    deleteMessage: (
+      dest: {
+        data: { cliMsgId: string; msgId: string; uidFrom: string };
+        threadId: string;
+        type?: ThreadType;
+      },
+      onlyMe?: boolean,
+    ) => Promise<{ status?: number }>;
     getAllFriends: (count?: number, page?: number) => Promise<ZaloFriend[]>;
     getAllGroups: () => Promise<{ gridVerMap?: Record<string, string> }>;
     getGroupInfo: (groupId: string | string[]) => Promise<{
@@ -109,7 +144,10 @@ declare module 'zca-js' {
       changed_profiles?: Record<string, { displayName?: string; zaloName?: string }>;
     }>;
     listener: {
-      on: (event: 'message', handler: (message: ZaloListenerMessage) => void) => void;
+      on: {
+        (event: 'message', handler: (message: ZaloListenerMessage) => void): void;
+        (event: 'undo', handler: (undo: ZaloUndoEvent) => void): void;
+      };
       start: () => void;
       stop: () => void;
     };
@@ -122,6 +160,7 @@ declare module 'zca-js' {
     data: {
       content?: unknown;
       msgId?: string | number;
+      cliMsgId?: string | number;
       msgType?: string;
       dName?: string;
       ts?: string | number;

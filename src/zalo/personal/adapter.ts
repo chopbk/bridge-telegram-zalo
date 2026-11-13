@@ -1,17 +1,20 @@
-import { ThreadType, type ZaloListenerMessage } from 'zca-js';
+import { ThreadType, type ZaloListenerMessage, type ZaloUndoEvent } from 'zca-js';
 import { getEnv } from '../../config/env.js';
 import logger from '../../config/logger.js';
 import { SendQueue } from '../../bridge/queue.js';
 import { safeUnlink, writeTempImage } from '../../bridge/media.js';
 import { touchThreadActivity, getThreadActivityMap } from '../../db/thread-activity.js';
+import { setZaloCliMsgId } from '../../db/message-links.js';
 import { claimProcessedMessage } from '../../db/processed.js';
 import { notifyAdmins } from '../../telegram/notify.js';
 import { getZaloApi, resetZaloClient } from './session.js';
 import type {
   ListRecentChatsOptions,
   NormalizedInbound,
+  NormalizedUndo,
   SendImagesOptions,
   SendTextOptions,
+  UndoMessageParams,
   ZaloAdapter,
   ZaloContact,
   ZaloImageAttachment,
@@ -23,10 +26,12 @@ import { extractLinkAttachment, formatLinkText } from './link.js';
 import { captionFromPhotoContent, extractInboundImages } from './photo.js';
 
 type InboundHandler = (msg: NormalizedInbound) => void | Promise<void>;
+type UndoHandler = (undo: NormalizedUndo) => void | Promise<void>;
 
 export class ZaloPersonalAdapter implements ZaloAdapter {
   readonly mode = 'personal' as const;
   private handler: InboundHandler | null = null;
+  private undoHandler: UndoHandler | null = null;
   private readonly queue: SendQueue;
   private started = false;
 
@@ -39,11 +44,20 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
     this.handler = handler;
   }
 
+  onUndo(handler: UndoHandler): void {
+    this.undoHandler = handler;
+  }
+
   async start(): Promise<void> {
     const api = await getZaloApi();
     api.listener.on('message', (message) => {
       void this.handleMessage(message).catch((err) => {
         logger.error({ err }, 'Personal Zalo inbound failed');
+      });
+    });
+    api.listener.on('undo', (undo) => {
+      void this.handleUndo(undo).catch((err) => {
+        logger.error({ err }, 'Personal Zalo undo handler failed');
       });
     });
     api.listener.start();
@@ -67,7 +81,37 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
       // ignore
     }
     this.handler = null;
+    this.undoHandler = null;
     this.started = false;
+  }
+
+  private async handleUndo(undo: ZaloUndoEvent): Promise<void> {
+    if (!this.undoHandler) return;
+    const content = undo.data.content;
+    const targetMsgId =
+      content?.globalMsgId != null
+        ? String(content.globalMsgId)
+        : undo.data.msgId != null
+          ? String(undo.data.msgId)
+          : '';
+    if (!targetMsgId) return;
+
+    const threadKind: ZaloThreadKind = undo.isGroup ? 'group' : 'user';
+    const zaloThreadId = String(undo.threadId);
+    const targetCliMsgId =
+      content?.cliMsgId != null
+        ? String(content.cliMsgId)
+        : undo.data.cliMsgId != null
+          ? String(undo.data.cliMsgId)
+          : undefined;
+
+    await this.undoHandler({
+      zaloThreadId,
+      threadKind,
+      targetMsgId,
+      targetCliMsgId,
+      isSelf: Boolean(undo.isSelf),
+    });
   }
 
   private async handleMessage(message: ZaloListenerMessage): Promise<void> {
@@ -95,15 +139,26 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
       threadKind === 'user' ? senderName : undefined,
     );
 
-    if (!this.handler) return;
-
     const content = message.data.content;
     const messageId =
       message.data.msgId != null ? String(message.data.msgId) : undefined;
+    const cliMsgId =
+      message.data.cliMsgId != null ? String(message.data.cliMsgId) : undefined;
     const msgType =
       typeof message.data.msgType === 'string' ? message.data.msgType : undefined;
     const isSelf = Boolean(message.isSelf);
     const styles = parseZaloPropertyStyles(message.data.propertyExt);
+
+    // Echo tin mình gửi: bổ sung cliMsgId vào message_links (cần cho undo)
+    if (isSelf && messageId && cliMsgId) {
+      try {
+        setZaloCliMsgId(this.mode, messageId, cliMsgId);
+      } catch {
+        // ignore — bảng có thể chưa có row
+      }
+    }
+
+    if (!this.handler) return;
 
     const base = {
       zaloUserId,
@@ -113,6 +168,8 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
       // 1-1: tên peer; bỏ qua khi isSelf để không đổi tên topic thành tên mình
       displayName: threadKind === 'user' && !isSelf ? senderName : undefined,
       messageId,
+      cliMsgId,
+      uidFrom: senderId,
       isSelf,
       styles: styles.length ? styles : undefined,
     };
@@ -343,6 +400,21 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
     return { kind: 'user' };
   }
 
+  async undoMessage(params: UndoMessageParams): Promise<void> {
+    const threadKind = params.threadKind ?? 'user';
+    const threadType = threadKind === 'group' ? ThreadType.Group : ThreadType.User;
+    const api = await getZaloApi();
+    await api.undo(
+      { msgId: params.msgId, cliMsgId: params.cliMsgId },
+      params.threadId,
+      threadType,
+    );
+    logger.info(
+      { threadId: params.threadId, threadKind, msgId: params.msgId },
+      'Personal Zalo undo ok',
+    );
+  }
+
   sendText(userId: string, text: string, opts?: SendTextOptions): Promise<ZaloSendResult> {
     const threadKind = opts?.threadKind ?? 'user';
     const threadType = threadKind === 'group' ? ThreadType.Group : ThreadType.User;
@@ -356,17 +428,19 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
             : text;
         const result = await api.sendMessage(payload, userId, threadType);
         const messageId = result.message?.msgId;
+        const cliMsgId = result.message?.cliMsgId;
         touchThreadActivity(this.mode, userId, threadKind, Date.now());
         // Claim để echo isSelf từ listener không forward lại topic
         if (messageId != null && String(messageId) !== 'ok') {
           claimProcessedMessage(this.mode, String(messageId));
         }
         logger.info(
-          { userId, threadKind, messageId },
+          { userId, threadKind, messageId, cliMsgId },
           'Personal Zalo sendText ok',
         );
         return {
           messageId: messageId !== undefined && messageId !== null ? String(messageId) : 'ok',
+          cliMsgId: cliMsgId != null ? String(cliMsgId) : undefined,
         };
       } catch (err) {
         resetZaloClient();
@@ -415,6 +489,8 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
         const attachments = (result.attachment ?? []).filter(Boolean);
         const messageId =
           result.message?.msgId ?? attachments[0]?.msgId ?? null;
+        const cliMsgId =
+          result.message?.cliMsgId ?? attachments[0]?.cliMsgId ?? null;
         if (!messageId && attachments.length === 0) {
           throw new Error(
             'Zalo trả về attachment rỗng — kiểm tra listener đang chạy và định dạng ảnh (jpg/png/webp)',
@@ -431,11 +507,19 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
           claimProcessedMessage(this.mode, String(messageId));
         }
         logger.info(
-          { userId, threadKind, count: images.length, messageId, attachmentCount: attachments.length },
+          {
+            userId,
+            threadKind,
+            count: images.length,
+            messageId,
+            cliMsgId,
+            attachmentCount: attachments.length,
+          },
           'Personal Zalo sendImages ok',
         );
         return {
           messageId: messageId !== undefined && messageId !== null ? String(messageId) : 'ok',
+          cliMsgId: cliMsgId != null ? String(cliMsgId) : undefined,
         };
       } catch (err) {
         resetZaloClient();

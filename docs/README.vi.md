@@ -192,6 +192,8 @@ Chỉ `TELEGRAM_ADMIN_IDS`, trong **forum** hoặc **chat riêng với bot**. L�
 | `/block` `/unblock` | Chặn cứng |
 | `/mute` `/unmute` | Tắt/bật broadcast |
 | `/readonly` `/twoway` | Chỉ Zalo→TG / bật lại 2 chiều |
+| `/signature` | Chữ ký dưới tin forward |
+| `/del` (reply) | Xoá/thu hồi tin 2 phía |
 
 ### Hệ thống
 
