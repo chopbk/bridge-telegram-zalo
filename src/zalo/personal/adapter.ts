@@ -114,13 +114,55 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
     });
   }
 
+  /**
+   * Lịch sử group (mặc định 50), sắp cũ → mới để nạp vào topic.
+   */
+  async fetchGroupHistory(groupId: string, count = 50): Promise<NormalizedInbound[]> {
+    const api = await getZaloApi();
+    if (typeof api.getGroupChatHistory !== 'function') {
+      throw new Error('API getGroupChatHistory không khả dụng trên session này');
+    }
+    const capped = Math.max(1, Math.min(count, 100));
+    const hist = await api.getGroupChatHistory(groupId, capped);
+    const msgs = [...(hist.groupMsgs ?? [])];
+    msgs.sort((a, b) => {
+      const ta =
+        normalizeZaloTs(a.data?.ts != null ? Number(a.data.ts) : undefined) ?? 0;
+      const tb =
+        normalizeZaloTs(b.data?.ts != null ? Number(b.data.ts) : undefined) ?? 0;
+      return ta - tb;
+    });
+
+    const out: NormalizedInbound[] = [];
+    for (const raw of msgs) {
+      const normalized = this.normalizeListenerMessage(raw, { touchActivity: false });
+      if (normalized) out.push(normalized);
+    }
+    logger.info(
+      { groupId, requested: capped, got: out.length },
+      'Fetched Zalo group chat history',
+    );
+    return out;
+  }
+
   private async handleMessage(message: ZaloListenerMessage): Promise<void> {
-    // User + Group (group chỉ forward nếu đã có trong DB — inbound lọc)
-    if (message.type !== ThreadType.User && message.type !== ThreadType.Group) return;
+    const normalized = this.normalizeListenerMessage(message, { touchActivity: true });
+    if (!normalized || !this.handler) return;
+    await this.handler(normalized);
+  }
+
+  /**
+   * Chuẩn hoá tin listener / history → NormalizedInbound.
+   * @returns null nếu không phải user/group thread.
+   */
+  private normalizeListenerMessage(
+    message: ZaloListenerMessage,
+    opts?: { touchActivity?: boolean },
+  ): NormalizedInbound | null {
+    if (message.type !== ThreadType.User && message.type !== ThreadType.Group) return null;
 
     const threadKind: ZaloThreadKind =
       message.type === ThreadType.Group ? 'group' : 'user';
-    // GroupMessage.threadId = idTo = group id; UserMessage.threadId = peer user id
     const zaloUserId = String(message.threadId);
     const senderName =
       typeof message.data.dName === 'string' ? message.data.dName : undefined;
@@ -130,14 +172,16 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
       normalizeZaloTs(
         message.data.ts != null ? Number(message.data.ts) : undefined,
       ) ?? Date.now();
-    // Activity theo thread (group id / user id) — không gắn tên người gửi vào group
-    touchThreadActivity(
-      this.mode,
-      zaloUserId,
-      threadKind,
-      atMs,
-      threadKind === 'user' ? senderName : undefined,
-    );
+
+    if (opts?.touchActivity !== false) {
+      touchThreadActivity(
+        this.mode,
+        zaloUserId,
+        threadKind,
+        atMs,
+        threadKind === 'user' ? senderName : undefined,
+      );
+    }
 
     const content = message.data.content;
     const messageId =
@@ -149,23 +193,19 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
     const isSelf = Boolean(message.isSelf);
     const styles = parseZaloPropertyStyles(message.data.propertyExt);
 
-    // Echo tin mình gửi: bổ sung cliMsgId vào message_links (cần cho undo)
     if (isSelf && messageId && cliMsgId) {
       try {
         setZaloCliMsgId(this.mode, messageId, cliMsgId);
       } catch {
-        // ignore — bảng có thể chưa có row
+        // ignore
       }
     }
-
-    if (!this.handler) return;
 
     const base = {
       zaloUserId,
       threadKind,
       senderId: threadKind === 'group' ? senderId : undefined,
       senderName: threadKind === 'group' ? senderName : undefined,
-      // 1-1: tên peer; bỏ qua khi isSelf để không đổi tên topic thành tên mình
       displayName: threadKind === 'user' && !isSelf ? senderName : undefined,
       messageId,
       cliMsgId,
@@ -175,37 +215,32 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
     };
 
     if (typeof content === 'string' && content.trim()) {
-      await this.handler({ ...base, text: content });
-      return;
+      return { ...base, text: content };
     }
 
     const images = extractInboundImages(content, msgType);
     if (images && images.length > 0) {
-      await this.handler({
+      return {
         ...base,
         text: captionFromPhotoContent(content),
         images,
-      });
-      return;
+      };
     }
 
     const link = extractLinkAttachment(content, msgType);
     if (link) {
-      await this.handler({
+      return {
         ...base,
         text: formatLinkText(link),
         images: link.thumb ? [{ url: link.thumb }] : undefined,
-      });
-      return;
+      };
     }
 
-    // Non-text: still surface to Telegram
-    const kind = describeUnsupportedContent(content, msgType);
-    await this.handler({
+    return {
       ...base,
       text: '',
-      unsupportedKind: kind,
-    });
+      unsupportedKind: describeUnsupportedContent(content, msgType),
+    };
   }
 
   async listContacts(): Promise<ZaloContact[]> {

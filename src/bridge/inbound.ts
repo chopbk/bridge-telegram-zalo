@@ -183,6 +183,41 @@ async function handleInbound(
     isGroup ? undefined : msg.displayName,
   );
 
+  // Hủy đăng ký: chỉ 1-1, không áp cho tin của chính mình
+  if (!isGroup && !msg.isSelf && text && isUnsubscribeIntent(text)) {
+    setSubscriptionStatus(msg.zaloUserId, adapter.mode, 'unsubscribed');
+    await sendToTopicSafe(
+      api,
+      customer,
+      `⛔ Khách hủy đăng ký: ${customer.displayName ?? customer.zaloUserId}`,
+    );
+    try {
+      await adapter.sendText(
+        msg.zaloUserId,
+        'Bạn đã hủy đăng ký nhận tin. Nhắn "đăng ký" hoặc /register nếu muốn đăng ký lại.',
+        { threadKind: 'user' },
+      );
+    } catch (err) {
+      logger.warn({ err, zaloUserId: msg.zaloUserId }, 'Failed to ack unsubscribe on Zalo');
+    }
+    return;
+  }
+
+  await forwardKnownCustomerInbound(api, adapter, customer, msg);
+}
+
+/**
+ * Forward tin Zalo → topic đã biết (dùng cho live inbound + nạp lịch sử group).
+ * Không xử lý register/unsubscribe; caller chịu trách nhiệm dedup nếu cần.
+ */
+export async function forwardKnownCustomerInbound(
+  api: Api,
+  adapter: ZaloAdapter,
+  customer: Customer,
+  msg: NormalizedInbound,
+): Promise<void> {
+  const isGroup = msg.threadKind === 'group' || customer.threadKind === 'group';
+  const text = (msg.text ?? '').trim();
   const statusPrefix =
     customer.subscriptionStatus !== 'approved'
       ? `[${customer.subscriptionStatus}] `
@@ -226,26 +261,6 @@ async function handleInbound(
   }
 
   if (!text) return;
-
-  // Hủy đăng ký: chỉ 1-1, không áp cho tin của chính mình
-  if (!isGroup && !msg.isSelf && isUnsubscribeIntent(text)) {
-    setSubscriptionStatus(msg.zaloUserId, adapter.mode, 'unsubscribed');
-    await sendToTopicSafe(
-      api,
-      customer,
-      `⛔ Khách hủy đăng ký: ${customer.displayName ?? customer.zaloUserId}`,
-    );
-    try {
-      await adapter.sendText(
-        msg.zaloUserId,
-        'Bạn đã hủy đăng ký nhận tin. Nhắn "đăng ký" hoặc /register nếu muốn đăng ký lại.',
-        { threadKind: 'user' },
-      );
-    } catch (err) {
-      logger.warn({ err, zaloUserId: msg.zaloUserId }, 'Failed to ack unsubscribe on Zalo');
-    }
-    return;
-  }
 
   const sent = await sendToTopicSafe(
     api,

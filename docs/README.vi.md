@@ -24,7 +24,7 @@ Bridge **Telegram ↔ Zalo** cho hỗ trợ khách và broadcast kênh.
 - **Hộp thư forum**: mỗi topic gắn 1 user **hoặc group** (`thread_kind`)
 - **Đăng ký**: khách `đăng ký` → `pending` → admin `/approve` / `/reject`
 - **CRUD allowlist**: `/useradd`, `/useredit`, `/userdel`, `/users`, `/search`
-- **Group**: map theo **id group**, không theo thành viên gửi; `/useradd <id> group`
+- **Group**: map theo **id group**, không theo thành viên gửi; `/useradd <id> group` (tạo topic + nạp 50 tin gần nhất)
 - **Ảnh 2 chiều**: topic ↔ Zalo (1 ảnh / album); ảnh channel cũng broadcast
 - **Nhiều admin / nhiều channel**: `TELEGRAM_ADMIN_IDS`, `TELEGRAM_CHANNEL_ID` (phẩy)
 - **Job broadcast** SQLite + retry + báo cáo admin; `/retrybroadcast`

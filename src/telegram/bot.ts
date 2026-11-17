@@ -25,6 +25,10 @@ import {
   retryBroadcast,
 } from '../bridge/broadcast.js';
 import {
+  backfillGroupHistory,
+  GROUP_HISTORY_DEFAULT_LIMIT,
+} from '../bridge/history.js';
+import {
   syncTelegramDeleteToZalo,
   syncTelegramEditToZalo,
 } from '../bridge/sync.js';
@@ -565,6 +569,34 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
         lines.push(
           `${created ? '+' : '~'} [${customer.threadKind}]${modeTag} ${customer.displayName ?? '—'} id=${customer.zaloUserId}`,
         );
+
+        // Group mới: nạp 50 tin gần nhất vào topic
+        if (
+          created &&
+          customer.threadKind === 'group' &&
+          adapter.fetchGroupHistory
+        ) {
+          try {
+            await ctx.reply(
+              `📜 Đang nạp ${GROUP_HISTORY_DEFAULT_LIMIT} tin lịch sử group ${customer.zaloUserId}…`,
+            );
+            const hist = await backfillGroupHistory(
+              ctx.api,
+              adapter,
+              customer,
+              GROUP_HISTORY_DEFAULT_LIMIT,
+            );
+            lines.push(
+              `  ↳ lịch sử: ${hist.loaded}/${hist.total}` +
+                (hist.failed ? ` (lỗi ${hist.failed})` : ''),
+            );
+          } catch (err) {
+            logger.error({ err, zaloId }, 'group history backfill failed');
+            lines.push(
+              `  ↳ lịch sử: lỗi — ${err instanceof Error ? err.message : 'không tải được'}`,
+            );
+          }
+        }
       } catch (err) {
         fail += 1;
         logger.error({ err, zaloId }, 'useradd failed');

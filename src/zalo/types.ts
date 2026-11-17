@@ -130,4 +130,6 @@ export interface ZaloAdapter {
     kind: ZaloThreadKind;
     displayName?: string;
   }>;
+  /** Personal: N tin gần nhất của group (cũ → mới). */
+  fetchGroupHistory?(groupId: string, count?: number): Promise<NormalizedInbound[]>;
 }

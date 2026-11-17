@@ -135,7 +135,8 @@ declare module 'zca-js' {
       groupId: string,
       count?: number,
     ) => Promise<{
-      groupMsgs?: Array<{ data?: { ts?: string | number }; ts?: string | number }>;
+      more?: number;
+      groupMsgs?: ZaloListenerMessage[];
     }>;
     getUserInfo?: (
       userId: string | string[],
