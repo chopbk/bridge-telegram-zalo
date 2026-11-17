@@ -32,14 +32,12 @@ const TG_TO_ZALO: Record<string, string> = {
   strikethrough: 's',
 };
 
-/** Parse styles từ propertyExt của tin Zalo inbound. */
-export function parseZaloPropertyStyles(propertyExt: unknown): TextStyleSpan[] {
-  if (!propertyExt || typeof propertyExt !== 'object') return [];
-  const extRaw = (propertyExt as { ext?: unknown }).ext;
-  let parsed: unknown = extRaw;
-  if (typeof extRaw === 'string' && extRaw.trim()) {
+/** Parse mảng styles [{ start, len, st }] từ object hoặc JSON string. */
+export function parseZaloStylesPayload(raw: unknown): TextStyleSpan[] {
+  let parsed: unknown = raw;
+  if (typeof raw === 'string' && raw.trim()) {
     try {
-      parsed = JSON.parse(extRaw);
+      parsed = JSON.parse(raw);
     } catch {
       return [];
     }
@@ -60,6 +58,12 @@ export function parseZaloPropertyStyles(propertyExt: unknown): TextStyleSpan[] {
     out.push({ start, len, st });
   }
   return out;
+}
+
+/** Parse styles từ propertyExt của tin Zalo inbound. */
+export function parseZaloPropertyStyles(propertyExt: unknown): TextStyleSpan[] {
+  if (!propertyExt || typeof propertyExt !== 'object') return [];
+  return parseZaloStylesPayload((propertyExt as { ext?: unknown }).ext);
 }
 
 export function shiftStyles(styles: TextStyleSpan[], offset: number): TextStyleSpan[] {

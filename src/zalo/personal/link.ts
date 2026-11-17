@@ -20,6 +20,8 @@ export function extractLinkAttachment(
   if (msgType && /recommended/i.test(msgType)) return null;
 
   const obj = content as Record<string, unknown>;
+  // Rich text (in đậm/nghiêng) — không phải link preview
+  if (String(obj.action ?? '') === 'rtf') return null;
   if (typeof obj.type === 'string' && obj.type.toLowerCase() === 'photo') {
     return null;
   }

@@ -25,6 +25,7 @@ import { parseZaloPropertyStyles } from '../../bridge/format.js';
 import { extractLinkAttachment, formatLinkText } from './link.js';
 import { fetchGroupMediaStoreMessages } from './media-store.js';
 import { captionFromPhotoContent, extractInboundImages } from './photo.js';
+import { extractRtfMessage } from './rtf.js';
 
 type InboundHandler = (msg: NormalizedInbound) => void | Promise<void>;
 type UndoHandler = (undo: NormalizedUndo) => void | Promise<void>;
@@ -220,7 +221,7 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
     const msgType =
       typeof message.data.msgType === 'string' ? message.data.msgType : undefined;
     const isSelf = Boolean(message.isSelf);
-    const styles = parseZaloPropertyStyles(message.data.propertyExt);
+    const propertyStyles = parseZaloPropertyStyles(message.data.propertyExt);
 
     if (isSelf && messageId && cliMsgId) {
       try {
@@ -240,11 +241,22 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
       cliMsgId,
       uidFrom: senderId,
       isSelf,
-      styles: styles.length ? styles : undefined,
+      styles: propertyStyles.length ? propertyStyles : undefined,
     };
 
     if (typeof content === 'string' && content.trim()) {
       return { ...base, text: content };
+    }
+
+    // Rich text (in đậm/nghiêng): title + params.styles, không phải link
+    const rtf = extractRtfMessage(content);
+    if (rtf) {
+      const styles = rtf.styles.length ? rtf.styles : propertyStyles;
+      return {
+        ...base,
+        text: rtf.text,
+        styles: styles.length ? styles : undefined,
+      };
     }
 
     const images = extractInboundImages(content, msgType);
