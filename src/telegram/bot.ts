@@ -1079,9 +1079,9 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
       }
       await ctx.reply(
         hist.loaded === 0 && hist.skipped > 0
-          ? `ℹ️ Không có tin mới: ${hist.skipped} tin cloud đã có trong topic.`
+          ? `ℹ️ Không có tin mới: ${hist.skipped} tin đã có trên topic.`
           : `✅ Lịch sử: +${hist.loaded} tin mới` +
-              (hist.skipped ? `, trùng ${hist.skipped}` : '') +
+              (hist.skipped ? `, đã có sẵn ${hist.skipped}` : '') +
               (hist.failed ? `, lỗi ${hist.failed}` : ''),
       );
     } catch (err) {

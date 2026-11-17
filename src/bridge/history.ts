@@ -2,12 +2,13 @@ import type { Api } from 'grammy';
 import { getEnv } from '../config/env.js';
 import logger from '../config/logger.js';
 import type { Customer } from '../db/customers.js';
-import { claimProcessedMessage, wasProcessed } from '../db/processed.js';
+import { findMessageLinkByZalo } from '../db/message-links.js';
+import { claimProcessedMessage } from '../db/processed.js';
 import type { ZaloAdapter } from '../zalo/types.js';
 import { forwardKnownCustomerInbound } from './inbound.js';
 
 export const GROUP_HISTORY_DEFAULT_LIMIT = 50;
-/** Lấy dư để bỏ qua tin đã forward live rồi vẫn còn tin cũ hơn */
+/** Lấy dư để bỏ qua tin đã forward thật rồi vẫn còn tin cũ hơn */
 const FETCH_MULTIPLIER = 3;
 const SEND_GAP_MS = 350;
 
@@ -21,6 +22,9 @@ export type BackfillResult = {
 
 /**
  * Sau /useradd group hoặc /history: nạp N tin gần nhất từ Zalo vào topic (cũ → mới).
+ *
+ * Chỉ coi là "trùng" khi đã có trong message_links (đã gửi lên Telegram thật).
+ * Không dùng processed_messages để skip — bảng đó có thể bị claim dù gửi topic thất bại.
  */
 export async function backfillGroupHistory(
   api: Api,
@@ -99,14 +103,13 @@ export async function backfillGroupHistory(
       threadKind: 'group' as const,
     };
 
+    // Chỉ skip khi đã forward thành công lên Telegram (có message_links)
     if (normalized.messageId) {
-      // Đã forward live trước đó → bỏ qua, lấy tiếp tin cũ hơn trong batch
-      if (wasProcessed(adapter.mode, normalized.messageId)) {
-        skipped += 1;
-        continue;
-      }
-      const claimed = claimProcessedMessage(adapter.mode, normalized.messageId);
-      if (!claimed) {
+      const alreadyOnTelegram = findMessageLinkByZalo(
+        adapter.mode,
+        normalized.messageId,
+      );
+      if (alreadyOnTelegram) {
         skipped += 1;
         continue;
       }
@@ -114,6 +117,10 @@ export async function backfillGroupHistory(
 
     try {
       await forwardKnownCustomerInbound(api, adapter, customer, normalized);
+      // Claim sau khi gửi OK — chặn echo live trùng; không claim trước khi gửi
+      if (normalized.messageId) {
+        claimProcessedMessage(adapter.mode, normalized.messageId);
+      }
       loaded += 1;
       await sleep(SEND_GAP_MS);
     } catch (err) {
@@ -127,9 +134,9 @@ export async function backfillGroupHistory(
 
   const summary =
     loaded === 0 && skipped > 0
-      ? `ℹ️ Không có tin mới để nạp: ${skipped}/${msgs.length} tin cloud đã có trong topic (trùng). Tin live đã cover phần gần nhất.`
+      ? `ℹ️ Không có tin mới: ${skipped}/${msgs.length} tin đã có trên topic này.`
       : `✅ Đã nạp lịch sử: ${loaded} tin mới` +
-        (skipped ? `, bỏ trùng ${skipped}` : '') +
+        (skipped ? `, đã có sẵn ${skipped}` : '') +
         (failed ? `, lỗi ${failed}` : '') +
         ` (quét ${msgs.length} tin cloud, ${meta.pages} trang)`;
 
