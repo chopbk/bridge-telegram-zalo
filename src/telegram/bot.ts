@@ -588,8 +588,11 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
               GROUP_HISTORY_DEFAULT_LIMIT,
             );
             lines.push(
-              `  ↳ lịch sử: ${hist.loaded}/${hist.total}` +
-                (hist.failed ? ` (lỗi ${hist.failed})` : ''),
+              hist.emptyHint
+                ? `  ↳ lịch sử: trống (Zalo cloud chưa trả tin)`
+                : `  ↳ lịch sử: +${hist.loaded}` +
+                    (hist.skipped ? `, trùng ${hist.skipped}` : '') +
+                    (hist.failed ? `, lỗi ${hist.failed}` : ''),
             );
           } catch (err) {
             logger.error({ err, zaloId }, 'group history backfill failed');
@@ -1070,10 +1073,16 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
         customer,
         GROUP_HISTORY_DEFAULT_LIMIT,
       );
+      if (hist.emptyHint) {
+        await ctx.reply(`⚠️ ${hist.emptyHint}`);
+        return;
+      }
       await ctx.reply(
-        `✅ Lịch sử: ${hist.loaded}/${hist.total}` +
-          (hist.skipped ? `, trùng ${hist.skipped}` : '') +
-          (hist.failed ? `, lỗi ${hist.failed}` : ''),
+        hist.loaded === 0 && hist.skipped > 0
+          ? `ℹ️ Không có tin mới: ${hist.skipped} tin cloud đã có trong topic.`
+          : `✅ Lịch sử: +${hist.loaded} tin mới` +
+              (hist.skipped ? `, trùng ${hist.skipped}` : '') +
+              (hist.failed ? `, lỗi ${hist.failed}` : ''),
       );
     } catch (err) {
       logger.error({ err, topicId }, 'manual history backfill failed');

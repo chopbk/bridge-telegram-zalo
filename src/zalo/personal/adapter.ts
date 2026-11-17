@@ -116,12 +116,28 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
 
   /**
    * Lịch sử group (mặc định 50), sắp cũ → mới để nạp vào topic.
-   * Dùng getCloudMessage (getrecentv2) — endpoint cũ /api/group/history đã 404.
+   * Dùng getCloudMessage (getrecentv2 / getoldv2) — phân trang để lấy đủ tin.
    */
-  async fetchGroupHistory(groupId: string, count = 50): Promise<NormalizedInbound[]> {
+  async fetchGroupHistory(
+    groupId: string,
+    count = 50,
+  ): Promise<{
+    messages: NormalizedInbound[];
+    meta: {
+      pages: number;
+      rawCount: number;
+      isFiltered: boolean;
+      lastMsgId?: string;
+    };
+  }> {
     const api = await getZaloApi();
-    const capped = Math.max(1, Math.min(count, 50)); // server CM tối đa ~50/trang
-    const msgs = await fetchGroupHistoryMessages(api, groupId, capped);
+    // Lấy dư hơn limit để /history vẫn còn tin mới khi một phần đã forward live
+    const want = Math.max(1, Math.min(count, 200));
+    const { msgs, pages, isFiltered, lastMsgId } = await fetchGroupHistoryMessages(
+      api,
+      groupId,
+      want,
+    );
     msgs.sort((a, b) => {
       const ta =
         normalizeZaloTs(a.data?.ts != null ? Number(a.data.ts) : undefined) ?? 0;
@@ -136,10 +152,25 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
       if (normalized) out.push(normalized);
     }
     logger.info(
-      { groupId, requested: capped, got: out.length },
+      {
+        groupId,
+        requested: want,
+        got: out.length,
+        pages,
+        isFiltered,
+        lastMsgId,
+      },
       'Fetched Zalo group chat history',
     );
-    return out;
+    return {
+      messages: out,
+      meta: {
+        pages,
+        rawCount: out.length,
+        isFiltered,
+        lastMsgId,
+      },
+    };
   }
 
   private async handleMessage(message: ZaloListenerMessage): Promise<void> {
@@ -595,19 +626,92 @@ async function fetchGroupHistoryMessages(
   api: Awaited<ReturnType<typeof getZaloApi>>,
   groupId: string,
   count: number,
-): Promise<ZaloListenerMessage[]> {
-  // Ưu tiên Cloud Message (zca-js ≥ 2.2) — /api/group/history đã bị Zalo gỡ (404)
+): Promise<{
+  msgs: ZaloListenerMessage[];
+  pages: number;
+  isFiltered: boolean;
+  lastMsgId?: string;
+}> {
+  // Cloud Message (zca-js ≥ 2.2) — /api/group/history đã 404
   if (typeof api.getCloudMessage === 'function') {
-    const page = await api.getCloudMessage(groupId);
-    const msgs = [...(page.groupMsgs ?? [])];
-    if (msgs.length <= count) return msgs;
-    // Trang recent thường mới → cũ; lấy count tin mới nhất rồi caller sẽ sort lại
-    return msgs.slice(0, count);
+    // Warm group context (đôi khi cloud trả rỗng nếu chưa "mở" group trong session)
+    try {
+      if (typeof api.getGroupInfo === 'function') {
+        await api.getGroupInfo(groupId);
+      }
+    } catch {
+      // ignore
+    }
+
+    const collected: ZaloListenerMessage[] = [];
+    const seen = new Set<string>();
+    let lastMsgId: string | undefined;
+    let isOld = false;
+    let isFiltered = false;
+    let pages = 0;
+    let finalLastMsgId: string | undefined;
+
+    for (let i = 0; i < 8 && collected.length < count; i++) {
+      let page;
+      try {
+        page = lastMsgId
+          ? await api.getCloudMessage(groupId, lastMsgId, { isOld })
+          : await api.getCloudMessage(groupId);
+      } catch (err) {
+        const code = (err as { code?: number | string })?.code;
+        const msg = err instanceof Error ? err.message : String(err);
+        // -69 = hết trang / stop retry
+        if (code === -69 || /stop retry/i.test(msg)) break;
+        throw err;
+      }
+      pages += 1;
+      if (page.isFiltered) isFiltered = true;
+      const batch = page.groupMsgs ?? [];
+      for (const m of batch) {
+        const id = m.data?.msgId != null ? String(m.data.msgId) : '';
+        if (id) {
+          if (seen.has(id)) continue;
+          seen.add(id);
+        }
+        collected.push(m);
+        if (collected.length >= count) break;
+      }
+
+      const nextId =
+        page.lastMsgId != null && String(page.lastMsgId) !== '0'
+          ? String(page.lastMsgId)
+          : '';
+      finalLastMsgId = nextId || finalLastMsgId;
+      const rawIsOld = page.isOld as number | boolean | undefined;
+      const pageIsOldFlag: boolean = Number(rawIsOld ?? 0) === 1;
+
+      if (!batch.length) {
+        // Trang rỗng nhưng bị filter + còn cursor → thử kho old một lần
+        if ((page.isFiltered || Number(page.isFiltered)) && nextId && !isOld) {
+          lastMsgId = nextId;
+          isOld = true;
+          continue;
+        }
+        break;
+      }
+
+      if (!nextId || nextId === lastMsgId) break;
+      lastMsgId = nextId;
+      isOld = pageIsOldFlag;
+      const hasMoreFlag = Number(page.hasMore ?? 0) === 1;
+      if (!hasMoreFlag && !pageIsOldFlag) break;
+    }
+
+    return { msgs: collected, pages, isFiltered, lastMsgId: finalLastMsgId };
   }
 
   if (typeof api.getGroupChatHistory === 'function') {
     const hist = await api.getGroupChatHistory(groupId, count);
-    return [...(hist.groupMsgs ?? [])];
+    return {
+      msgs: [...(hist.groupMsgs ?? [])],
+      pages: 1,
+      isFiltered: false,
+    };
   }
 
   throw new Error(
@@ -620,7 +724,7 @@ async function probeGroupLastMessageTs(
   groupId: string,
 ): Promise<number | undefined> {
   try {
-    const msgs = await fetchGroupHistoryMessages(api, groupId, 1);
+    const { msgs } = await fetchGroupHistoryMessages(api, groupId, 1);
     let best: number | undefined;
     for (const m of msgs) {
       const raw =

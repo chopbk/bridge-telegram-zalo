@@ -130,6 +130,20 @@ export interface ZaloAdapter {
     kind: ZaloThreadKind;
     displayName?: string;
   }>;
-  /** Personal: N tin gần nhất của group (cũ → mới). */
-  fetchGroupHistory?(groupId: string, count?: number): Promise<NormalizedInbound[]>;
+  /**
+   * Personal: lịch sử group từ Cloud Message (cũ → mới).
+   * `count` = số tin tối đa cần lấy (có phân trang).
+   */
+  fetchGroupHistory?(
+    groupId: string,
+    count?: number,
+  ): Promise<{
+    messages: NormalizedInbound[];
+    meta: {
+      pages: number;
+      rawCount: number;
+      isFiltered: boolean;
+      lastMsgId?: string;
+    };
+  }>;
 }

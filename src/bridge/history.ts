@@ -2,22 +2,25 @@ import type { Api } from 'grammy';
 import { getEnv } from '../config/env.js';
 import logger from '../config/logger.js';
 import type { Customer } from '../db/customers.js';
-import { claimProcessedMessage } from '../db/processed.js';
+import { claimProcessedMessage, wasProcessed } from '../db/processed.js';
 import type { ZaloAdapter } from '../zalo/types.js';
 import { forwardKnownCustomerInbound } from './inbound.js';
 
 export const GROUP_HISTORY_DEFAULT_LIMIT = 50;
-const SEND_GAP_MS = 300;
+/** Lấy dư để bỏ qua tin đã forward live rồi vẫn còn tin cũ hơn */
+const FETCH_MULTIPLIER = 3;
+const SEND_GAP_MS = 350;
 
 export type BackfillResult = {
   loaded: number;
   skipped: number;
   failed: number;
   total: number;
+  emptyHint?: string;
 };
 
 /**
- * Sau /useradd group: nạp N tin gần nhất từ Zalo vào topic (cũ → mới).
+ * Sau /useradd group hoặc /history: nạp N tin gần nhất từ Zalo vào topic (cũ → mới).
  */
 export async function backfillGroupHistory(
   api: Api,
@@ -44,9 +47,12 @@ export async function backfillGroupHistory(
     )
     .catch(() => undefined);
 
-  let msgs;
+  let fetchResult;
   try {
-    msgs = await adapter.fetchGroupHistory(customer.zaloUserId, limit);
+    fetchResult = await adapter.fetchGroupHistory(
+      customer.zaloUserId,
+      Math.min(200, limit * FETCH_MULTIPLIER),
+    );
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     await api
@@ -57,15 +63,48 @@ export async function backfillGroupHistory(
     throw err;
   }
 
+  const msgs = fetchResult.messages;
+  const meta = fetchResult.meta;
+
+  if (msgs.length === 0) {
+    const hint = meta.isFiltered
+      ? 'Zalo đang lọc lịch sử group này với session hiện tại (isFiltered). Thử mở group trên Zalo PC/Web rồi /history lại.'
+      : 'Zalo Cloud không trả tin nào (group có thể chưa sync lịch sử lên cloud). Mở group trên Zalo PC/Web một lần rồi /history lại.';
+    await api
+      .sendMessage(chatId, `⚠️ ${hint}`, { message_thread_id: topicId })
+      .catch(() => undefined);
+    logger.warn(
+      { groupId: customer.zaloUserId, topicId, meta },
+      'Group history empty from Zalo cloud',
+    );
+    return {
+      loaded: 0,
+      skipped: 0,
+      failed: 0,
+      total: 0,
+      emptyHint: hint,
+    };
+  }
+
   let loaded = 0;
   let skipped = 0;
   let failed = 0;
 
   for (const msg of msgs) {
-    // Gắn đúng thread id (history đôi khi thiếu / lệch)
-    const normalized = { ...msg, zaloUserId: customer.zaloUserId, threadKind: 'group' as const };
+    if (loaded >= limit) break;
+
+    const normalized = {
+      ...msg,
+      zaloUserId: customer.zaloUserId,
+      threadKind: 'group' as const,
+    };
 
     if (normalized.messageId) {
+      // Đã forward live trước đó → bỏ qua, lấy tiếp tin cũ hơn trong batch
+      if (wasProcessed(adapter.mode, normalized.messageId)) {
+        skipped += 1;
+        continue;
+      }
       const claimed = claimProcessedMessage(adapter.mode, normalized.messageId);
       if (!claimed) {
         skipped += 1;
@@ -86,14 +125,16 @@ export async function backfillGroupHistory(
     }
   }
 
-  await api
-    .sendMessage(
-      chatId,
-      `✅ Đã nạp lịch sử: ${loaded}/${msgs.length}` +
+  const summary =
+    loaded === 0 && skipped > 0
+      ? `ℹ️ Không có tin mới để nạp: ${skipped}/${msgs.length} tin cloud đã có trong topic (trùng). Tin live đã cover phần gần nhất.`
+      : `✅ Đã nạp lịch sử: ${loaded} tin mới` +
         (skipped ? `, bỏ trùng ${skipped}` : '') +
-        (failed ? `, lỗi ${failed}` : ''),
-      { message_thread_id: topicId },
-    )
+        (failed ? `, lỗi ${failed}` : '') +
+        ` (quét ${msgs.length} tin cloud, ${meta.pages} trang)`;
+
+  await api
+    .sendMessage(chatId, summary, { message_thread_id: topicId })
     .catch(() => undefined);
 
   logger.info(
@@ -104,6 +145,8 @@ export async function backfillGroupHistory(
       skipped,
       failed,
       total: msgs.length,
+      pages: meta.pages,
+      isFiltered: meta.isFiltered,
     },
     'Group history backfill done',
   );
