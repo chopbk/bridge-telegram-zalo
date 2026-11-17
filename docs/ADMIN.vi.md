@@ -102,6 +102,7 @@ Nhiều id cùng lúc: **cách nhau bởi dấu phẩy** `,`.
 |------|--------|
 | `/useradd <id>` | `/useradd 123` |
 | `/useradd <id> group` | `/useradd 456 group` — tạo topic + nạp 50 tin gần nhất |
+| `/history` (trong topic group) | Nạp lại 50 tin gần nhất (khi lần đầu lỗi / muốn sync lại) |
 | `/useradd id1,id2,id3` | `/useradd 111,222,333` |
 | `/useradd id1,id2 group` | Thêm nhiều group |
 | `/useradd id1,id2 readonly` | Chỉ Zalo→Telegram (không reply ngược) |

@@ -238,6 +238,7 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
         '/signature           chữ ký chỉ khi broadcast channel→Zalo',
         '/signature set <chữ> bật + đặt chữ ký',
         '/signature on|off    bật/tắt',
+        '/history             nạp lại 50 tin gần nhất (topic group)',
         '/del                 reply tin topic → xoá/thu hồi 2 phía',
         '(Sửa tin TG topic → sync Zalo; thu hồi Zalo → xoá TG)',
         '',
@@ -1033,6 +1034,53 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
     }
     const cfg = setSignatureText(text);
     await ctx.reply(`Đã đặt chữ ký (bật):\n— ${cfg.text}`);
+  });
+
+  bot.command(['history', 'loadhistory', 'backfill'], async (ctx) => {
+    if (!(await requireAdmin(ctx))) return;
+    if (!inForumGroup(ctx)) {
+      await ctx.reply('Dùng /history trong topic group cần nạp lịch sử.');
+      return;
+    }
+    const topicId = ctx.message?.message_thread_id;
+    if (!topicId) {
+      await ctx.reply('Chỉ dùng trong topic (không dùng General).');
+      return;
+    }
+    const customer = customerByTopic(topicId, adapter.mode);
+    if (!customer) {
+      await ctx.reply('Topic này chưa gắn khách Zalo.');
+      return;
+    }
+    if (customer.threadKind !== 'group') {
+      await ctx.reply('Chỉ nạp lịch sử cho topic group.');
+      return;
+    }
+    if (!adapter.fetchGroupHistory) {
+      await ctx.reply('Adapter hiện tại không hỗ trợ lịch sử group.');
+      return;
+    }
+    await ctx.reply(
+      `📜 Đang nạp ${GROUP_HISTORY_DEFAULT_LIMIT} tin gần nhất của group ${customer.zaloUserId}…`,
+    );
+    try {
+      const hist = await backfillGroupHistory(
+        ctx.api,
+        adapter,
+        customer,
+        GROUP_HISTORY_DEFAULT_LIMIT,
+      );
+      await ctx.reply(
+        `✅ Lịch sử: ${hist.loaded}/${hist.total}` +
+          (hist.skipped ? `, trùng ${hist.skipped}` : '') +
+          (hist.failed ? `, lỗi ${hist.failed}` : ''),
+      );
+    } catch (err) {
+      logger.error({ err, topicId }, 'manual history backfill failed');
+      await ctx.reply(
+        `⚠️ Nạp lịch sử thất bại: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   });
 
   bot.command(['del', 'delete', 'xoá', 'xoa'], async (ctx) => {
