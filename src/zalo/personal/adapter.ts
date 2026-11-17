@@ -23,6 +23,7 @@ import type {
 } from '../types.js';
 import { parseZaloPropertyStyles } from '../../bridge/format.js';
 import { extractLinkAttachment, formatLinkText } from './link.js';
+import { fetchGroupMediaStoreMessages } from './media-store.js';
 import { captionFromPhotoContent, extractInboundImages } from './photo.js';
 
 type InboundHandler = (msg: NormalizedInbound) => void | Promise<void>;
@@ -116,7 +117,7 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
 
   /**
    * Lịch sử group (mặc định 50), sắp cũ → mới để nạp vào topic.
-   * Dùng getCloudMessage (getrecentv2 / getoldv2) — phân trang để lấy đủ tin.
+   * Ưu tiên getCloudMessage; nếu Cloud trống → fallback Media Store (ảnh/file/link).
    */
   async fetchGroupHistory(
     groupId: string,
@@ -128,16 +129,14 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
       rawCount: number;
       isFiltered: boolean;
       lastMsgId?: string;
+      source: 'cloud' | 'media_store' | 'empty';
     };
   }> {
     const api = await getZaloApi();
     // Lấy dư hơn limit để /history vẫn còn tin mới khi một phần đã forward live
     const want = Math.max(1, Math.min(count, 200));
-    const { msgs, pages, isFiltered, lastMsgId } = await fetchGroupHistoryMessages(
-      api,
-      groupId,
-      want,
-    );
+    const { msgs, pages, isFiltered, lastMsgId, source } =
+      await fetchGroupHistoryMessages(api, groupId, want);
     msgs.sort((a, b) => {
       const ta =
         normalizeZaloTs(a.data?.ts != null ? Number(a.data.ts) : undefined) ?? 0;
@@ -159,6 +158,7 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
         pages,
         isFiltered,
         lastMsgId,
+        source,
       },
       'Fetched Zalo group chat history',
     );
@@ -169,6 +169,7 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
         rawCount: out.length,
         isFiltered,
         lastMsgId,
+        source,
       },
     };
   }
@@ -631,6 +632,7 @@ async function fetchGroupHistoryMessages(
   pages: number;
   isFiltered: boolean;
   lastMsgId?: string;
+  source: 'cloud' | 'media_store' | 'empty';
 }> {
   // Cloud Message (zca-js ≥ 2.2) — /api/group/history đã 404
   if (typeof api.getCloudMessage === 'function') {
@@ -702,15 +704,56 @@ async function fetchGroupHistoryMessages(
       if (!hasMoreFlag && !pageIsOldFlag) break;
     }
 
-    return { msgs: collected, pages, isFiltered, lastMsgId: finalLastMsgId };
+    if (collected.length > 0) {
+      return {
+        msgs: collected,
+        pages,
+        isFiltered,
+        lastMsgId: finalLastMsgId,
+        source: 'cloud',
+      };
+    }
+
+    // Cloud trống / bị lọc → fallback Kho ảnh·file·link (vẫn sync được một phần)
+    const media = await fetchGroupMediaStoreMessages(api, groupId, count);
+    if (media.msgs.length > 0) {
+      return {
+        msgs: media.msgs,
+        pages: pages + media.pages,
+        isFiltered,
+        lastMsgId: finalLastMsgId,
+        source: 'media_store',
+      };
+    }
+
+    return {
+      msgs: [],
+      pages,
+      isFiltered,
+      lastMsgId: finalLastMsgId,
+      source: 'empty',
+    };
   }
 
   if (typeof api.getGroupChatHistory === 'function') {
     const hist = await api.getGroupChatHistory(groupId, count);
+    const msgs = [...(hist.groupMsgs ?? [])];
     return {
-      msgs: [...(hist.groupMsgs ?? [])],
+      msgs,
       pages: 1,
       isFiltered: false,
+      source: msgs.length ? 'cloud' : 'empty',
+    };
+  }
+
+  // Không có Cloud API — vẫn thử Media Store
+  const media = await fetchGroupMediaStoreMessages(api, groupId, count);
+  if (media.msgs.length > 0) {
+    return {
+      msgs: media.msgs,
+      pages: media.pages,
+      isFiltered: false,
+      source: 'media_store',
     };
   }
 

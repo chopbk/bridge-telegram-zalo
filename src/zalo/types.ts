@@ -132,6 +132,7 @@ export interface ZaloAdapter {
   }>;
   /**
    * Personal: lịch sử group từ Cloud Message (cũ → mới).
+   * Cloud trống → fallback Media Store (ảnh/file/link).
    * `count` = số tin tối đa cần lấy (có phân trang).
    */
   fetchGroupHistory?(
@@ -144,6 +145,7 @@ export interface ZaloAdapter {
       rawCount: number;
       isFiltered: boolean;
       lastMsgId?: string;
+      source?: 'cloud' | 'media_store' | 'empty';
     };
   }>;
 }

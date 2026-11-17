@@ -73,13 +73,13 @@ export async function backfillGroupHistory(
   if (msgs.length === 0) {
     const hint = meta.isFiltered
       ? 'Zalo đang lọc lịch sử group này với session hiện tại (isFiltered). Thử mở group trên Zalo PC/Web rồi /history lại.'
-      : 'Zalo Cloud không trả tin nào (group có thể chưa sync lịch sử lên cloud). Mở group trên Zalo PC/Web một lần rồi /history lại.';
+      : 'Zalo Cloud + Media Store đều trống (group chưa sync tin lên cloud / kho media). Mở group trên Zalo PC/Web một lần rồi /history lại — tin text cũ có thể vẫn không lấy được nếu Zalo chưa đẩy lên cloud.';
     await api
       .sendMessage(chatId, `⚠️ ${hint}`, { message_thread_id: topicId })
       .catch(() => undefined);
     logger.warn(
       { groupId: customer.zaloUserId, topicId, meta },
-      'Group history empty from Zalo cloud',
+      'Group history empty from Zalo cloud + media store',
     );
     return {
       loaded: 0,
@@ -132,13 +132,17 @@ export async function backfillGroupHistory(
     }
   }
 
+  const sourceLabel =
+    meta.source === 'media_store'
+      ? 'kho media (Cloud trống — chỉ ảnh/file/link)'
+      : 'cloud';
   const summary =
     loaded === 0 && skipped > 0
       ? `ℹ️ Không có tin mới: ${skipped}/${msgs.length} tin đã có trên topic này.`
       : `✅ Đã nạp lịch sử: ${loaded} tin mới` +
         (skipped ? `, đã có sẵn ${skipped}` : '') +
         (failed ? `, lỗi ${failed}` : '') +
-        ` (quét ${msgs.length} tin cloud, ${meta.pages} trang)`;
+        ` (quét ${msgs.length} tin ${sourceLabel}, ${meta.pages} trang)`;
 
   await api
     .sendMessage(chatId, summary, { message_thread_id: topicId })

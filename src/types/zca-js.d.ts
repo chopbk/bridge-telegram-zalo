@@ -158,6 +158,31 @@ declare module 'zca-js' {
       unchanged_profiles?: Record<string, { displayName?: string; zaloName?: string }>;
       changed_profiles?: Record<string, { displayName?: string; zaloName?: string }>;
     }>;
+    /** Service host map (login session) — dùng khi gọi API custom */
+    zpwServiceMap?: {
+      media_store?: string[];
+      [key: string]: string[] | undefined;
+    };
+    /**
+     * Đăng ký method tùy chỉnh (ctx + utils.encodeAES/request/resolve).
+     * Dùng để gọi /api/mediastore/list khi Cloud Message trống.
+     */
+    custom?: (
+      name: string,
+      callback: (args: {
+        ctx: { imei: string; uid?: string; secretKey?: string };
+        utils: {
+          makeURL: (base: string, params?: Record<string, unknown>) => string;
+          encodeAES: (data: string) => string | null;
+          request: (url: string, init?: RequestInit) => Promise<Response>;
+          resolve: <T = unknown>(
+            response: Response,
+            mapper?: (result: { data?: unknown }) => T,
+          ) => Promise<T>;
+        };
+        props: unknown;
+      }) => unknown | Promise<unknown>,
+    ) => void;
     listener: {
       on: {
         (event: 'message', handler: (message: ZaloListenerMessage) => void): void;
