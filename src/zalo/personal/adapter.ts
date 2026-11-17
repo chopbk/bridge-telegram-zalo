@@ -116,15 +116,12 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
 
   /**
    * Lịch sử group (mặc định 50), sắp cũ → mới để nạp vào topic.
+   * Dùng getCloudMessage (getrecentv2) — endpoint cũ /api/group/history đã 404.
    */
   async fetchGroupHistory(groupId: string, count = 50): Promise<NormalizedInbound[]> {
     const api = await getZaloApi();
-    if (typeof api.getGroupChatHistory !== 'function') {
-      throw new Error('API getGroupChatHistory không khả dụng trên session này');
-    }
-    const capped = Math.max(1, Math.min(count, 100));
-    const hist = await api.getGroupChatHistory(groupId, capped);
-    const msgs = [...(hist.groupMsgs ?? [])];
+    const capped = Math.max(1, Math.min(count, 50)); // server CM tối đa ~50/trang
+    const msgs = await fetchGroupHistoryMessages(api, groupId, capped);
     msgs.sort((a, b) => {
       const ta =
         normalizeZaloTs(a.data?.ts != null ? Number(a.data.ts) : undefined) ?? 0;
@@ -251,7 +248,7 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
 
   /**
    * Chat gần đây: user theo friends.lastActionTime; group theo
-   * unread.ts + activity DB + (tuỳ chọn) probe getGroupChatHistory —
+   * unread.ts + activity DB + (tuỳ chọn) probe cloud history —
    * không dùng createdTime (sai thứ tự "gần đây").
    */
   async listRecentChats(
@@ -350,7 +347,12 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
         }
 
         const missing = groups.filter((g) => g.lastActiveAt == null);
-        if (probeHistory && missing.length > 0 && typeof api.getGroupChatHistory === 'function') {
+        if (
+          probeHistory &&
+          missing.length > 0 &&
+          (typeof api.getCloudMessage === 'function' ||
+            typeof api.getGroupChatHistory === 'function')
+        ) {
           // Ưu tiên probe group ghim / chưa có ts — tối đa 120 để tránh quá lâu
           const toProbe = missing.slice(0, 120);
           logger.info(
@@ -589,13 +591,36 @@ function normalizeZaloTs(raw: number | undefined): number | undefined {
   return raw < 1e12 ? raw * 1000 : raw;
 }
 
+async function fetchGroupHistoryMessages(
+  api: Awaited<ReturnType<typeof getZaloApi>>,
+  groupId: string,
+  count: number,
+): Promise<ZaloListenerMessage[]> {
+  // Ưu tiên Cloud Message (zca-js ≥ 2.2) — /api/group/history đã bị Zalo gỡ (404)
+  if (typeof api.getCloudMessage === 'function') {
+    const page = await api.getCloudMessage(groupId);
+    const msgs = [...(page.groupMsgs ?? [])];
+    if (msgs.length <= count) return msgs;
+    // Trang recent thường mới → cũ; lấy count tin mới nhất rồi caller sẽ sort lại
+    return msgs.slice(0, count);
+  }
+
+  if (typeof api.getGroupChatHistory === 'function') {
+    const hist = await api.getGroupChatHistory(groupId, count);
+    return [...(hist.groupMsgs ?? [])];
+  }
+
+  throw new Error(
+    'Không có API lịch sử group (cần zca-js ≥ 2.2 với getCloudMessage)',
+  );
+}
+
 async function probeGroupLastMessageTs(
   api: Awaited<ReturnType<typeof getZaloApi>>,
   groupId: string,
 ): Promise<number | undefined> {
   try {
-    const hist = await api.getGroupChatHistory!(groupId, 1);
-    const msgs = hist?.groupMsgs ?? [];
+    const msgs = await fetchGroupHistoryMessages(api, groupId, 1);
     let best: number | undefined;
     for (const m of msgs) {
       const raw =
@@ -608,7 +633,7 @@ async function probeGroupLastMessageTs(
     }
     return best;
   } catch (err) {
-    logger.warn({ err, groupId }, 'getGroupChatHistory probe failed');
+    logger.warn({ err, groupId }, 'group history probe failed');
     return undefined;
   }
 }

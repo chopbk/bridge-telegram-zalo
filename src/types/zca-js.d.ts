@@ -131,12 +131,26 @@ declare module 'zca-js' {
       };
     }>;
     getPinConversations?: () => Promise<{ conversations?: string[] }>;
+    /** @deprecated Zalo đã gỡ /api/group/history (404) — dùng getCloudMessage */
     getGroupChatHistory?: (
       groupId: string,
       count?: number,
     ) => Promise<{
       more?: number;
       groupMsgs?: ZaloListenerMessage[];
+    }>;
+    /** Lịch sử group qua Cloud Message (/api/cm/getrecentv2 | getoldv2) — zca-js ≥ 2.2 */
+    getCloudMessage?: (
+      groupId: string,
+      lastMsgId?: string,
+      options?: { isOld?: boolean | number; localMsgIds?: string[]; isOA?: boolean },
+    ) => Promise<{
+      groupMsgs?: ZaloListenerMessage[];
+      lastMsgId?: string;
+      hasMore?: number | boolean;
+      isOld?: number | boolean;
+      isFiltered?: number | boolean;
+      error?: number;
     }>;
     getUserInfo?: (
       userId: string | string[],

@@ -94,7 +94,7 @@ export type ListRecentChatsOptions = {
   /** Chỉ lấy user / group / cả hai */
   focus?: 'all' | 'user' | 'group';
   /**
-   * Với group thiếu timestamp: gọi getGroupChatHistory(1) để lấy tin cuối.
+   * Với group thiếu timestamp: gọi getCloudMessage để lấy tin cuối.
    * Mặc định true khi focus=group.
    */
   probeGroupHistory?: boolean;
