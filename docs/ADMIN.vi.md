@@ -60,7 +60,9 @@ Vào đúng topic → gõ chữ hoặc gửi ảnh (có thể gửi nhiều ản
 ### 3) Đăng tin hàng loạt (broadcast)
 
 Đăng **text** hoặc **ảnh** lên channel đã cấu hình.  
-Bot gửi lần lượt cho danh sách approved → báo cáo admin (`ok` / `fail`).
+Bot gửi lần lượt cho danh sách approved (không mute) → **mirror bản sao vào từng topic** → báo cáo admin (`ok` / `fail`).
+
+Muốn thu hồi trên Zalo: vào topic → reply tin mirror → `/del`.
 
 Gửi lại phần lỗi: `/retrybroadcast <jobId>` (id nằm trong tin báo cáo).
 
@@ -122,7 +124,7 @@ Trong topic: `/approve` · `/reject` · `/block` · `/unblock` · `/mute` · `/u
 | `/signature` | Xem chữ ký (chỉ khi **broadcast channel → Zalo**) |
 | `/signature set <chữ>` | Bật + đặt chữ ký (`— chữ` dưới tin channel gửi Zalo) |
 | `/signature on` / `off` | Bật / tắt (giữ text đã lưu) |
-| `/del` (reply) | Xoá tin trên Telegram **và** thu hồi tin Zalo tương ứng |
+| `/del` (reply) | Xoá tin trên Telegram **và** thu hồi tin Zalo tương ứng (kể cả mirror broadcast) |
 
 Topic (Zalo↔Telegram) **không** thêm chữ ký.
 

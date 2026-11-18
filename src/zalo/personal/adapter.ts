@@ -512,7 +512,7 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
         const cliMsgId = result.message?.cliMsgId;
         touchThreadActivity(this.mode, userId, threadKind, Date.now());
         // Claim để echo isSelf từ listener không forward lại topic
-        if (messageId != null && String(messageId) !== 'ok') {
+        if (messageId != null && String(messageId) !== 'ok' && String(messageId) !== '0') {
           claimProcessedMessage(this.mode, String(messageId));
         }
         logger.info(
@@ -580,11 +580,11 @@ export class ZaloPersonalAdapter implements ZaloAdapter {
         touchThreadActivity(this.mode, userId, threadKind, Date.now());
         for (const a of attachments) {
           const id = a?.msgId;
-          if (id != null && String(id) !== 'ok') {
+          if (id != null && String(id) !== 'ok' && String(id) !== '0') {
             claimProcessedMessage(this.mode, String(id));
           }
         }
-        if (messageId != null && String(messageId) !== 'ok') {
+        if (messageId != null && String(messageId) !== 'ok' && String(messageId) !== '0') {
           claimProcessedMessage(this.mode, String(messageId));
         }
         logger.info(

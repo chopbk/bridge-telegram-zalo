@@ -1134,7 +1134,7 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
       return;
     }
     try {
-      const result = await retryBroadcast(adapter, jobId);
+      const result = await retryBroadcast(adapter, ctx.api, jobId);
       if (!result) {
         await ctx.reply('Không tìm thấy broadcast job.');
         return;
@@ -1279,6 +1279,7 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
 
     try {
       const result = await broadcastChannelText(adapter, post.text, {
+        api: ctx.api,
         channelMessageId: post.message_id,
       });
       logger.info({ result, channelId: post.chat.id }, 'Channel broadcast done');
@@ -1303,6 +1304,7 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
           'Broadcasting channel photo → Zalo',
         );
         const result = await broadcastChannelPhotos(adapter, [largest.file_id], {
+          api: ctx.api,
           caption,
           channelMessageId: post.message_id,
         });
@@ -1331,7 +1333,7 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
     pending.fileIds.push(largest.file_id);
     if (pending.timer) clearTimeout(pending.timer);
     pending.timer = setTimeout(() => {
-      void flushChannelAlbum(key, adapter);
+      void flushChannelAlbum(key, adapter, ctx.api);
     }, ALBUM_FLUSH_MS);
   });
 
@@ -1410,13 +1412,18 @@ async function flushAlbum(
   }
 }
 
-async function flushChannelAlbum(key: string, adapter: ZaloAdapter): Promise<void> {
+async function flushChannelAlbum(
+  key: string,
+  adapter: ZaloAdapter,
+  api: Context['api'],
+): Promise<void> {
   const pending = pendingChannelAlbums.get(key);
   if (!pending) return;
   pendingChannelAlbums.delete(key);
 
   try {
     const result = await broadcastChannelPhotos(adapter, pending.fileIds, {
+      api,
       caption: pending.caption,
       channelMessageId: pending.messageId,
     });

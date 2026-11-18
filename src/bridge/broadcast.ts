@@ -1,5 +1,7 @@
+import type { Api } from 'grammy';
 import { getEnv } from '../config/env.js';
 import logger from '../config/logger.js';
+import { findByZaloUserId } from '../db/customers.js';
 import {
   claimNextBroadcastItem,
   createBroadcastJob,
@@ -13,9 +15,10 @@ import {
   requeueFailedBroadcastItems,
   type BroadcastItemPayload,
 } from '../db/jobs.js';
+import { upsertMessageLink } from '../db/message-links.js';
 import { appendSignaturePlain } from '../db/settings.js';
 import { notifyAdmins } from '../telegram/notify.js';
-import type { ZaloAdapter, ZaloImageAttachment } from '../zalo/types.js';
+import type { ZaloAdapter, ZaloImageAttachment, ZaloSendResult } from '../zalo/types.js';
 import { bufferToZaloImage, downloadToBuffer, telegramFileUrl } from './media.js';
 import { broadcastTargets } from './mapper.js';
 
@@ -33,18 +36,29 @@ export type BroadcastResult = {
   failedUserIds: string[];
 };
 
+type BroadcastOpts = {
+  text: string;
+  imageFileIds?: string[];
+  channelMessageId?: number;
+  report?: boolean;
+  /** Cần để mirror tin vào topic + lưu map /del → thu hồi Zalo */
+  api: Api;
+};
+
 /**
  * Luồng C: Telegram channel → fan-out Zalo (persisted jobs + retry)
+ * Đồng thời mirror vào topic Telegram để admin /del → thu hồi Zalo.
  */
 export async function broadcastChannelText(
   adapter: ZaloAdapter,
   text: string,
-  opts?: { channelMessageId?: number; report?: boolean },
+  opts: { api: Api; channelMessageId?: number; report?: boolean },
 ): Promise<BroadcastResult> {
   return enqueueAndDrainBroadcast(adapter, {
     text,
-    channelMessageId: opts?.channelMessageId,
-    report: opts?.report,
+    channelMessageId: opts.channelMessageId,
+    report: opts.report,
+    api: opts.api,
   });
 }
 
@@ -52,27 +66,23 @@ export async function broadcastChannelText(
 export async function broadcastChannelPhotos(
   adapter: ZaloAdapter,
   imageFileIds: string[],
-  opts?: { caption?: string; channelMessageId?: number; report?: boolean },
+  opts: { api: Api; caption?: string; channelMessageId?: number; report?: boolean },
 ): Promise<BroadcastResult> {
   if (!imageFileIds.length) {
     throw new Error('broadcastChannelPhotos: empty imageFileIds');
   }
   return enqueueAndDrainBroadcast(adapter, {
-    text: (opts?.caption ?? '').trim(),
+    text: (opts.caption ?? '').trim(),
     imageFileIds,
-    channelMessageId: opts?.channelMessageId,
-    report: opts?.report,
+    channelMessageId: opts.channelMessageId,
+    report: opts.report,
+    api: opts.api,
   });
 }
 
 async function enqueueAndDrainBroadcast(
   adapter: ZaloAdapter,
-  opts: {
-    text: string;
-    imageFileIds?: string[];
-    channelMessageId?: number;
-    report?: boolean;
-  },
+  opts: BroadcastOpts,
 ): Promise<BroadcastResult> {
   const targets = broadcastTargets(adapter.mode);
 
@@ -120,7 +130,7 @@ async function enqueueAndDrainBroadcast(
   );
 
   try {
-    const result = await drainBroadcastItems(adapter, parentId);
+    const result = await drainBroadcastItems(adapter, opts.api, parentId);
     if (opts.report !== false) {
       await reportBroadcast(result);
     }
@@ -134,6 +144,7 @@ async function enqueueAndDrainBroadcast(
 
 export async function retryBroadcast(
   adapter: ZaloAdapter,
+  api: Api,
   parentId: number,
 ): Promise<BroadcastResult | null> {
   const parent = getJob(parentId);
@@ -153,11 +164,12 @@ export async function retryBroadcast(
   }
 
   logger.info({ parentId, requeued: n }, 'Requeued failed broadcast items');
-  return drainBroadcastItems(adapter, parentId);
+  return drainBroadcastItems(adapter, api, parentId);
 }
 
 export async function drainBroadcastItems(
   adapter: ZaloAdapter,
+  api: Api,
   parentId?: number,
 ): Promise<BroadcastResult> {
   let lastParent = parentId ?? 0;
@@ -189,6 +201,7 @@ export async function drainBroadcastItems(
     }
 
     try {
+      let zaloResult: ZaloSendResult;
       if (payload.imageFileIds && payload.imageFileIds.length > 0) {
         if (!adapter.sendImages) {
           throw new Error('Adapter không hỗ trợ gửi ảnh');
@@ -199,16 +212,24 @@ export async function drainBroadcastItems(
           images = await downloadTelegramFileIds(payload.imageFileIds);
           photoCache.set(key, images);
         }
-        await adapter.sendImages(payload.zaloUserId, images, {
+        zaloResult = await adapter.sendImages(payload.zaloUserId, images, {
           threadKind: payload.threadKind ?? 'user',
           caption: payload.text || undefined,
         });
       } else {
-        await adapter.sendText(payload.zaloUserId, payload.text, {
+        zaloResult = await adapter.sendText(payload.zaloUserId, payload.text, {
           threadKind: payload.threadKind ?? 'user',
         });
       }
       markJobDone(job.id);
+
+      // Mirror vào topic + map t2z để /del thu hồi Zalo (best-effort)
+      await mirrorBroadcastToTopic(api, adapter, payload, zaloResult).catch((err) => {
+        logger.warn(
+          { err, zaloUserId: payload.zaloUserId, jobId: job.id },
+          'Broadcast mirrored to topic failed (Zalo already sent)',
+        );
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       const outcome = markJobFailedOrRetry(job.id, message);
@@ -227,16 +248,107 @@ export async function drainBroadcastItems(
   return { ...summary, jobId: lastParent };
 }
 
+/**
+ * Gửi bản sao broadcast vào topic khách + lưu message_links (t2z).
+ * Reply /del trên tin này → thu hồi Zalo.
+ */
+async function mirrorBroadcastToTopic(
+  api: Api,
+  adapter: ZaloAdapter,
+  payload: BroadcastItemPayload,
+  zaloResult: ZaloSendResult,
+): Promise<void> {
+  const customer = findByZaloUserId(payload.zaloUserId, adapter.mode);
+  if (!customer || customer.topicMissing) {
+    logger.warn(
+      { zaloUserId: payload.zaloUserId },
+      'Broadcast mirror skipped — no topic',
+    );
+    return;
+  }
+
+  const env = getEnv();
+  const chatId = env.telegramForumGroupId;
+  const topicId = customer.telegramTopicId;
+  const body = (payload.text ?? '').trim();
+  const fileIds = payload.imageFileIds ?? [];
+
+  let telegramMessageId: number;
+
+  if (fileIds.length > 0) {
+    if (fileIds.length === 1) {
+      const sent = await api.sendPhoto(chatId, fileIds[0]!, {
+        message_thread_id: topicId,
+        caption: body || undefined,
+      });
+      telegramMessageId = sent.message_id;
+    } else {
+      const media = fileIds.map((fileId, i) => ({
+        type: 'photo' as const,
+        media: fileId,
+        ...(i === 0 && body ? { caption: body } : {}),
+      }));
+      const sent = await api.sendMediaGroup(chatId, media, {
+        message_thread_id: topicId,
+      });
+      const first = sent[0];
+      if (!first) throw new Error('sendMediaGroup returned empty');
+      telegramMessageId = first.message_id;
+    }
+  } else {
+    const sent = await api.sendMessage(chatId, body || '📣 (broadcast trống)', {
+      message_thread_id: topicId,
+    });
+    telegramMessageId = sent.message_id;
+  }
+
+  const zaloMsgId = zaloResult.messageId;
+  if (!zaloMsgId || zaloMsgId === 'ok' || zaloMsgId === '0') {
+    logger.warn(
+      { zaloUserId: payload.zaloUserId, telegramMessageId, zaloMsgId },
+      'Broadcast mirrored to topic but Zalo msgId missing — /del sẽ không thu hồi được',
+    );
+    return;
+  }
+
+  upsertMessageLink({
+    provider: adapter.mode,
+    direction: 't2z',
+    zaloMsgId,
+    zaloCliMsgId: zaloResult.cliMsgId ?? null,
+    zaloThreadId: payload.zaloUserId,
+    threadKind: payload.threadKind ?? customer.threadKind,
+    telegramChatId: chatId,
+    telegramMessageId,
+    telegramTopicId: topicId,
+    bodyText: body || null,
+  });
+
+  logger.info(
+    {
+      zaloUserId: payload.zaloUserId,
+      topicId,
+      telegramMessageId,
+      zaloMsgId,
+      hasCli: Boolean(zaloResult.cliMsgId),
+    },
+    'Broadcast mirrored to Telegram topic',
+  );
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-export async function resumePendingBroadcasts(adapter: ZaloAdapter): Promise<void> {
+export async function resumePendingBroadcasts(
+  adapter: ZaloAdapter,
+  api: Api,
+): Promise<void> {
   const recovered = recoverStuckJobs();
   if (recovered > 0) {
     logger.info({ recovered }, 'Recovered stuck broadcast jobs after restart');
   }
-  const result = await drainBroadcastItems(adapter);
+  const result = await drainBroadcastItems(adapter, api);
   if (result.ok + result.fail > 0) {
     await reportBroadcast(result);
   }

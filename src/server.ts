@@ -22,7 +22,7 @@ async function main(): Promise<void> {
   await adapter.start();
 
   // Resume persisted broadcast jobs after restart
-  void resumePendingBroadcasts(adapter).catch((err) => {
+  void resumePendingBroadcasts(adapter, telegramBot.api).catch((err) => {
     logger.error({ err }, 'Failed to resume pending broadcasts');
   });
 
