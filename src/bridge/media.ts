@@ -3,12 +3,14 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import dns from 'node:dns';
+import https from 'node:https';
+import http from 'node:http';
 import { imageSize } from 'image-size';
 import logger from '../config/logger.js';
 import type { ZaloImageAttachment } from '../zalo/types.js';
 import { getSessionDownloadHeaders } from '../zalo/personal/session.js';
 
-// Telegram hay timeout trên IPv6 ở một số mạng VN — ưu tiên IPv4
+// Telegram hay timeout trên IPv6 ở một số mạng — ưu tiên IPv4
 try {
   dns.setDefaultResultOrder('ipv4first');
 } catch {
@@ -19,56 +21,165 @@ export type DownloadOpts = {
   headers?: Record<string, string>;
   timeoutMs?: number;
   retries?: number;
+  /** Ép IPv4 (tránh hang Happy Eyeballs / IPv6). Mặc định true với host telegram. */
+  forceIpv4?: boolean;
 };
 
-export async function downloadToBuffer(
+function shouldForceIpv4(url: string, explicit?: boolean): boolean {
+  if (explicit != null) return explicit;
+  try {
+    const host = new URL(url).hostname;
+    return /telegram\.org$/i.test(host) || /telesco\.pe$/i.test(host);
+  } catch {
+    return false;
+  }
+}
+
+function isAbortError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const e = err as { name?: string; code?: number | string; message?: string };
+  return (
+    e.name === 'AbortError' ||
+    e.code === 20 ||
+    e.code === 'ABORT_ERR' ||
+    /aborted|timeout/i.test(String(e.message ?? ''))
+  );
+}
+
+/** Tải HTTP(S) ép IPv4 — ổn định hơn fetch khi Telegram IPv6 bị treo. */
+function downloadViaIpv4(
   url: string,
-  headersOrOpts?: Record<string, string> | DownloadOpts,
+  headers: Record<string, string> | undefined,
+  timeoutMs: number,
+  redirectsLeft = 5,
 ): Promise<Buffer> {
-  const opts: DownloadOpts =
-    headersOrOpts && ('headers' in headersOrOpts || 'timeoutMs' in headersOrOpts || 'retries' in headersOrOpts)
-      ? (headersOrOpts as DownloadOpts)
-      : { headers: headersOrOpts as Record<string, string> | undefined };
-
-  const headers = opts.headers;
-  const timeoutMs = opts.timeoutMs ?? 45_000;
-  const retries = Math.max(1, opts.retries ?? 3);
-  let lastErr: unknown;
-
-  for (let attempt = 1; attempt <= retries; attempt++) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+  return new Promise((resolve, reject) => {
+    let parsed: URL;
     try {
-      const res = await fetch(url, {
+      parsed = new URL(url);
+    } catch (err) {
+      reject(err);
+      return;
+    }
+    const lib = parsed.protocol === 'http:' ? http : https;
+    const req = lib.get(
+      {
+        protocol: parsed.protocol,
+        hostname: parsed.hostname,
+        port: parsed.port || undefined,
+        path: `${parsed.pathname}${parsed.search}`,
+        family: 4,
+        servername: parsed.hostname,
         headers: {
           'User-Agent':
             headers?.['User-Agent'] ??
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0',
           ...headers,
         },
-        redirect: 'follow',
-        signal: controller.signal,
-      });
-      if (!res.ok) {
-        throw new Error(`Download failed ${res.status}: ${url.slice(0, 120)}`);
+        timeout: timeoutMs,
+      },
+      (res) => {
+        const status = res.statusCode ?? 0;
+        if (status >= 300 && status < 400 && res.headers.location) {
+          res.resume();
+          if (redirectsLeft <= 0) {
+            reject(new Error(`Too many redirects: ${url.slice(0, 120)}`));
+            return;
+          }
+          const next = new URL(res.headers.location, url).toString();
+          downloadViaIpv4(next, headers, timeoutMs, redirectsLeft - 1).then(resolve, reject);
+          return;
+        }
+        if (status < 200 || status >= 300) {
+          res.resume();
+          reject(new Error(`Download failed ${status}: ${url.slice(0, 120)}`));
+          return;
+        }
+        const chunks: Buffer[] = [];
+        res.on('data', (c: Buffer) => chunks.push(c));
+        res.on('end', () => {
+          const buf = Buffer.concat(chunks);
+          if (buf.length === 0) {
+            reject(new Error(`Download empty body: ${url.slice(0, 120)}`));
+            return;
+          }
+          resolve(buf);
+        });
+        res.on('error', reject);
+      },
+    );
+    req.on('timeout', () => {
+      req.destroy(new Error(`IPv4 download timeout after ${timeoutMs}ms`));
+    });
+    req.on('error', reject);
+  });
+}
+
+export async function downloadToBuffer(
+  url: string,
+  headersOrOpts?: Record<string, string> | DownloadOpts,
+): Promise<Buffer> {
+  const opts: DownloadOpts =
+    headersOrOpts && ('headers' in headersOrOpts || 'timeoutMs' in headersOrOpts || 'retries' in headersOrOpts || 'forceIpv4' in headersOrOpts)
+      ? (headersOrOpts as DownloadOpts)
+      : { headers: headersOrOpts as Record<string, string> | undefined };
+
+  const headers = opts.headers;
+  const timeoutMs = opts.timeoutMs ?? 45_000;
+  const retries = Math.max(1, opts.retries ?? 3);
+  const forceIpv4 = shouldForceIpv4(url, opts.forceIpv4);
+  let lastErr: unknown;
+
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      // Telegram: ưu tiên IPv4 ngay từ đầu (fetch đôi khi abort dù curl OK)
+      if (forceIpv4) {
+        return await downloadViaIpv4(url, headers, timeoutMs);
       }
-      const ab = await res.arrayBuffer();
-      const buf = Buffer.from(ab);
-      if (buf.length === 0) {
-        throw new Error(`Download empty body: ${url.slice(0, 120)}`);
+
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const res = await fetch(url, {
+          headers: {
+            'User-Agent':
+              headers?.['User-Agent'] ??
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0',
+            ...headers,
+          },
+          redirect: 'follow',
+          signal: controller.signal,
+        });
+        if (!res.ok) {
+          throw new Error(`Download failed ${res.status}: ${url.slice(0, 120)}`);
+        }
+        const ab = await res.arrayBuffer();
+        const buf = Buffer.from(ab);
+        if (buf.length === 0) {
+          throw new Error(`Download empty body: ${url.slice(0, 120)}`);
+        }
+        return buf;
+      } finally {
+        clearTimeout(timer);
       }
-      return buf;
     } catch (err) {
       lastErr = err;
       logger.warn(
-        { err, attempt, retries, url: url.slice(0, 80) },
+        { err, attempt, retries, forceIpv4, url: url.slice(0, 80) },
         'downloadToBuffer attempt failed',
       );
-      if (attempt < retries) {
-        await new Promise((r) => setTimeout(r, 500 * attempt));
+      // Abort/timeout → thử IPv4 cứng ở lần sau
+      if (!forceIpv4 && isAbortError(err) && attempt < retries) {
+        try {
+          logger.warn({ url: url.slice(0, 80) }, 'Retry download via forced IPv4');
+          return await downloadViaIpv4(url, headers, timeoutMs);
+        } catch (ipv4Err) {
+          lastErr = ipv4Err;
+        }
       }
-    } finally {
-      clearTimeout(timer);
+      if (attempt < retries) {
+        await new Promise((r) => setTimeout(r, 800 * attempt));
+      }
     }
   }
 

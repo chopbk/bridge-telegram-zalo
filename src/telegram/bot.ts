@@ -1371,7 +1371,7 @@ async function downloadTelegramPhotos(
       throw new Error(`Telegram getFile thiếu file_path (id=${fileIds[i]})`);
     }
     const url = await telegramFileUrl(botToken, file.file_path);
-    const buf = await downloadToBuffer(url);
+    const buf = await downloadToBuffer(url, { timeoutMs: 90_000, retries: 5, forceIpv4: true });
     const ext = file.file_path.includes('.')
       ? file.file_path.split('.').pop() || 'jpg'
       : 'jpg';

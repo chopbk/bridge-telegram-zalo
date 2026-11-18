@@ -89,7 +89,7 @@ async function enqueueAndDrainBroadcast(
   // Tải ảnh trước khi tạo job — fail sớm nếu Telegram timeout / chặn mạng
   if (opts.imageFileIds?.length) {
     try {
-      const images = await downloadTelegramFileIds(opts.imageFileIds);
+      const images = await downloadTelegramFileIds(opts.api, opts.imageFileIds);
       photoCache.set(photoCacheKey(opts.imageFileIds), images);
       logger.info(
         { count: images.length, bytes: images.reduce((s, i) => s + i.data.length, 0) },
@@ -98,7 +98,7 @@ async function enqueueAndDrainBroadcast(
     } catch (err) {
       logger.error({ err }, 'Failed to download channel photos from Telegram');
       throw new Error(
-        `Không tải được ảnh từ Telegram (timeout/mạng tới api.telegram.org). Thử lại hoặc kiểm tra mạng/VPN. Chi tiết: ${
+        `Không tải được ảnh từ Telegram (timeout/mạng tới api.telegram.org). Thử đăng lại ảnh hoặc đợi mạng ổn. Chi tiết: ${
           err instanceof Error ? err.message : String(err)
         }`,
       );
@@ -209,7 +209,7 @@ export async function drainBroadcastItems(
         const key = photoCacheKey(payload.imageFileIds);
         let images = photoCache.get(key);
         if (!images) {
-          images = await downloadTelegramFileIds(payload.imageFileIds);
+          images = await downloadTelegramFileIds(api, payload.imageFileIds);
           photoCache.set(key, images);
         }
         zaloResult = await adapter.sendImages(payload.zaloUserId, images, {
@@ -371,24 +371,26 @@ async function reportBroadcast(result: BroadcastResult): Promise<void> {
   await notifyAdmins(lines.join('\n'));
 }
 
-async function downloadTelegramFileIds(fileIds: string[]): Promise<ZaloImageAttachment[]> {
+async function downloadTelegramFileIds(
+  api: Api,
+  fileIds: string[],
+): Promise<ZaloImageAttachment[]> {
   const env = getEnv();
   const out: ZaloImageAttachment[] = [];
   for (let i = 0; i < fileIds.length; i++) {
-    const metaUrl = `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/getFile?file_id=${encodeURIComponent(fileIds[i]!)}`;
-    const metaBuf = await downloadToBuffer(metaUrl, { timeoutMs: 45_000, retries: 3 });
-    const meta = JSON.parse(metaBuf.toString('utf8')) as {
-      ok?: boolean;
-      result?: { file_path?: string };
-      description?: string;
-    };
-    if (!meta.ok || !meta.result?.file_path) {
-      throw new Error(`getFile failed: ${meta.description ?? 'unknown'}`);
+    // Dùng grammy getFile (cùng stack bot polling) — ổn định hơn raw fetch getFile
+    const file = await api.getFile(fileIds[i]!);
+    if (!file.file_path) {
+      throw new Error(`getFile thiếu file_path (id=${fileIds[i]})`);
     }
-    const url = await telegramFileUrl(env.TELEGRAM_BOT_TOKEN, meta.result.file_path);
-    const buf = await downloadToBuffer(url, { timeoutMs: 60_000, retries: 3 });
-    const ext = meta.result.file_path.includes('.')
-      ? meta.result.file_path.split('.').pop() || 'jpg'
+    const url = await telegramFileUrl(env.TELEGRAM_BOT_TOKEN, file.file_path);
+    const buf = await downloadToBuffer(url, {
+      timeoutMs: 90_000,
+      retries: 5,
+      forceIpv4: true,
+    });
+    const ext = file.file_path.includes('.')
+      ? file.file_path.split('.').pop() || 'jpg'
       : 'jpg';
     out.push(bufferToZaloImage(buf, `broadcast-${i + 1}.${ext}`));
   }
