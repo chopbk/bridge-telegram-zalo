@@ -200,9 +200,19 @@ async function replyChunks(ctx: Context, text: string): Promise<void> {
   if (buf) await ctx.reply(buf);
 }
 
+/** Chạy job nặng ngoài middleware — tránh getFile/broadcast treo polling tuần tự. */
+function runBackground(label: string, fn: () => Promise<void>): void {
+  void fn().catch((err) => {
+    logger.error({ err, label }, 'Background Telegram task failed');
+  });
+}
+
 export function createTelegramBot(adapter: ZaloAdapter): Bot {
   const env = getEnv();
-  const bot = new Bot(env.TELEGRAM_BOT_TOKEN);
+  // timeoutSeconds thấp: mạng Telegram kém không được treo bot hàng phút
+  const bot = new Bot(env.TELEGRAM_BOT_TOKEN, {
+    client: { timeoutSeconds: 60 },
+  });
 
   bot.command('help', async (ctx) => {
     if (!(await requireAdmin(ctx))) return;
@@ -1224,24 +1234,31 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
     const meta = { telegramMessageId: msg.message_id, telegramTopicId: topicId };
 
     if (!groupId) {
-      try {
-        logger.info({ topicId, fileId: largest.file_id }, 'Forwarding topic photo → Zalo');
-        const images = await downloadTelegramPhotos(ctx.api, env.TELEGRAM_BOT_TOKEN, [
-          largest.file_id,
-        ]);
-        await forwardTopicImagesToZalo(
-          adapter,
-          topicId,
-          images,
-          caption,
-          captionEntities,
-          meta,
-        );
-      } catch (err) {
-        logger.error({ err, topicId }, 'Topic photo→Zalo failed');
-        const detail = err instanceof Error ? err.message : 'Gửi ảnh Zalo thất bại.';
-        await ctx.reply(detail).catch(() => undefined);
-      }
+      const api = ctx.api;
+      runBackground('topic-photo-to-zalo', async () => {
+        try {
+          logger.info({ topicId, fileId: largest.file_id }, 'Forwarding topic photo → Zalo');
+          const images = await downloadTelegramPhotos(api, env.TELEGRAM_BOT_TOKEN, [
+            largest.file_id,
+          ]);
+          await forwardTopicImagesToZalo(
+            adapter,
+            topicId,
+            images,
+            caption,
+            captionEntities,
+            meta,
+          );
+        } catch (err) {
+          logger.error({ err, topicId }, 'Topic photo→Zalo failed');
+          const detail = err instanceof Error ? err.message : 'Gửi ảnh Zalo thất bại.';
+          await api
+            .sendMessage(env.telegramForumGroupId, detail, {
+              message_thread_id: topicId,
+            })
+            .catch(() => undefined);
+        }
+      });
       return;
     }
 
@@ -1272,23 +1289,29 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
     }, ALBUM_FLUSH_MS);
   });
 
-  bot.on('channel_post:text', async (ctx) => {
+  bot.on('channel_post:text', (ctx) => {
     const post = ctx.channelPost;
     if (!post || !('text' in post) || !post.text) return;
     if (!env.telegramChannelIds.includes(post.chat.id)) return;
 
-    try {
-      const result = await broadcastChannelText(adapter, post.text, {
-        api: ctx.api,
-        channelMessageId: post.message_id,
-      });
-      logger.info({ result, channelId: post.chat.id }, 'Channel broadcast done');
-    } catch (err) {
-      logger.error({ err, channelId: post.chat.id }, 'Channel broadcast failed');
-    }
+    const api = ctx.api;
+    const text = post.text;
+    const channelId = post.chat.id;
+    const channelMessageId = post.message_id;
+    runBackground('channel-text-broadcast', async () => {
+      try {
+        const result = await broadcastChannelText(adapter, text, {
+          api,
+          channelMessageId,
+        });
+        logger.info({ result, channelId }, 'Channel broadcast done');
+      } catch (err) {
+        logger.error({ err, channelId }, 'Channel broadcast failed');
+      }
+    });
   });
 
-  bot.on('channel_post:photo', async (ctx) => {
+  bot.on('channel_post:photo', (ctx) => {
     const post = ctx.channelPost;
     if (!post || !('photo' in post) || !post.photo?.length) return;
     if (!env.telegramChannelIds.includes(post.chat.id)) return;
@@ -1298,23 +1321,28 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
     const groupId = post.media_group_id;
 
     if (!groupId) {
-      try {
-        logger.info(
-          { channelId: post.chat.id, fileId: largest.file_id },
-          'Broadcasting channel photo → Zalo',
-        );
-        const result = await broadcastChannelPhotos(adapter, [largest.file_id], {
-          api: ctx.api,
-          caption,
-          channelMessageId: post.message_id,
-        });
-        logger.info({ result, channelId: post.chat.id }, 'Channel photo broadcast done');
-      } catch (err) {
-        logger.error({ err, channelId: post.chat.id }, 'Channel photo broadcast failed');
-        await notifyAdmins(
-          `Broadcast ảnh channel thất bại: ${err instanceof Error ? err.message : String(err)}`,
-        ).catch(() => undefined);
-      }
+      const api = ctx.api;
+      const channelId = post.chat.id;
+      const fileId = largest.file_id;
+      const channelMessageId = post.message_id;
+      runBackground('channel-photo-broadcast', async () => {
+        try {
+          logger.info({ channelId, fileId }, 'Broadcasting channel photo → Zalo');
+          const result = await broadcastChannelPhotos(adapter, [fileId], {
+            api,
+            caption,
+            channelMessageId,
+          });
+          logger.info({ result, channelId }, 'Channel photo broadcast done');
+        } catch (err) {
+          logger.error({ err, channelId }, 'Channel photo broadcast failed');
+          await notifyAdmins(
+            `Broadcast ảnh channel thất bại: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          ).catch(() => undefined);
+        }
+      });
       return;
     }
 
@@ -1359,6 +1387,34 @@ function emptyUsersHint(mode: string): string {
   ].join('\n');
 }
 
+async function resolveTelegramFilePath(
+  api: Context['api'],
+  botToken: string,
+  fileId: string,
+): Promise<string> {
+  try {
+    const file = await api.getFile(fileId);
+    if (file.file_path) return file.file_path;
+  } catch (err) {
+    logger.warn({ err, fileId: fileId.slice(0, 24) }, 'grammy getFile failed — IPv4 raw fallback');
+  }
+  const metaUrl = `https://api.telegram.org/bot${botToken}/getFile?file_id=${encodeURIComponent(fileId)}`;
+  const metaBuf = await downloadToBuffer(metaUrl, {
+    timeoutMs: 30_000,
+    retries: 3,
+    forceIpv4: true,
+  });
+  const meta = JSON.parse(metaBuf.toString('utf8')) as {
+    ok?: boolean;
+    result?: { file_path?: string };
+    description?: string;
+  };
+  if (!meta.ok || !meta.result?.file_path) {
+    throw new Error(`getFile failed: ${meta.description ?? 'unknown'}`);
+  }
+  return meta.result.file_path;
+}
+
 async function downloadTelegramPhotos(
   api: Context['api'],
   botToken: string,
@@ -1366,15 +1422,10 @@ async function downloadTelegramPhotos(
 ): Promise<ZaloImageAttachment[]> {
   const out: ZaloImageAttachment[] = [];
   for (let i = 0; i < fileIds.length; i++) {
-    const file = await api.getFile(fileIds[i]!);
-    if (!file.file_path) {
-      throw new Error(`Telegram getFile thiếu file_path (id=${fileIds[i]})`);
-    }
-    const url = await telegramFileUrl(botToken, file.file_path);
-    const buf = await downloadToBuffer(url, { timeoutMs: 90_000, retries: 5, forceIpv4: true });
-    const ext = file.file_path.includes('.')
-      ? file.file_path.split('.').pop() || 'jpg'
-      : 'jpg';
+    const filePath = await resolveTelegramFilePath(api, botToken, fileIds[i]!);
+    const url = await telegramFileUrl(botToken, filePath);
+    const buf = await downloadToBuffer(url, { timeoutMs: 60_000, retries: 4, forceIpv4: true });
+    const ext = filePath.includes('.') ? filePath.split('.').pop() || 'jpg' : 'jpg';
     out.push(bufferToZaloImage(buf, `tg-photo-${i + 1}.${ext}`));
   }
   return out;

@@ -371,6 +371,34 @@ async function reportBroadcast(result: BroadcastResult): Promise<void> {
   await notifyAdmins(lines.join('\n'));
 }
 
+async function resolveBroadcastFilePath(api: Api, fileId: string): Promise<string> {
+  try {
+    const file = await api.getFile(fileId);
+    if (file.file_path) return file.file_path;
+  } catch (err) {
+    logger.warn(
+      { err, fileId: fileId.slice(0, 24) },
+      'grammy getFile failed for broadcast — IPv4 raw fallback',
+    );
+  }
+  const env = getEnv();
+  const metaUrl = `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/getFile?file_id=${encodeURIComponent(fileId)}`;
+  const metaBuf = await downloadToBuffer(metaUrl, {
+    timeoutMs: 30_000,
+    retries: 3,
+    forceIpv4: true,
+  });
+  const meta = JSON.parse(metaBuf.toString('utf8')) as {
+    ok?: boolean;
+    result?: { file_path?: string };
+    description?: string;
+  };
+  if (!meta.ok || !meta.result?.file_path) {
+    throw new Error(`getFile failed: ${meta.description ?? 'unknown'}`);
+  }
+  return meta.result.file_path;
+}
+
 async function downloadTelegramFileIds(
   api: Api,
   fileIds: string[],
@@ -378,20 +406,14 @@ async function downloadTelegramFileIds(
   const env = getEnv();
   const out: ZaloImageAttachment[] = [];
   for (let i = 0; i < fileIds.length; i++) {
-    // Dùng grammy getFile (cùng stack bot polling) — ổn định hơn raw fetch getFile
-    const file = await api.getFile(fileIds[i]!);
-    if (!file.file_path) {
-      throw new Error(`getFile thiếu file_path (id=${fileIds[i]})`);
-    }
-    const url = await telegramFileUrl(env.TELEGRAM_BOT_TOKEN, file.file_path);
+    const filePath = await resolveBroadcastFilePath(api, fileIds[i]!);
+    const url = await telegramFileUrl(env.TELEGRAM_BOT_TOKEN, filePath);
     const buf = await downloadToBuffer(url, {
-      timeoutMs: 90_000,
-      retries: 5,
+      timeoutMs: 60_000,
+      retries: 4,
       forceIpv4: true,
     });
-    const ext = file.file_path.includes('.')
-      ? file.file_path.split('.').pop() || 'jpg'
-      : 'jpg';
+    const ext = filePath.includes('.') ? filePath.split('.').pop() || 'jpg' : 'jpg';
     out.push(bufferToZaloImage(buf, `broadcast-${i + 1}.${ext}`));
   }
   return out;
