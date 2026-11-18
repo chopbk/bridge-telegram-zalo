@@ -240,7 +240,7 @@ export function createTelegramBot(adapter: ZaloAdapter): Bot {
         '/signature on|off    bật/tắt',
         '/history             nạp lại 50 tin gần nhất (topic group)',
         '/del                 reply tin topic → xoá/thu hồi 2 phía',
-        '(Sửa tin TG topic → sync Zalo; thu hồi Zalo → xoá TG)',
+        '(Sửa tin TG topic → sync Zalo; thu hồi Zalo → giữ log TG)',
         '',
         '▸ Hệ thống',
         '/status              thống kê nhanh',

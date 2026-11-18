@@ -13,7 +13,7 @@ import {
   type TelegramEntityLike,
 } from './format.js';
 
-/** msgId Zalo đang undo từ phía bridge — bỏ qua echo undo → xoá TG */
+/** msgId Zalo đang undo từ phía bridge — bỏ qua echo undo (tránh xử lý kép) */
 const suppressedZaloUndos = new Map<string, number>();
 const SUPPRESS_TTL_MS = 60_000;
 
@@ -37,7 +37,8 @@ function isZaloUndoSuppressed(provider: string, zaloMsgId: string): boolean {
 }
 
 /**
- * Zalo thu hồi tin → xoá tin tương ứng trên Telegram.
+ * Zalo thu hồi tin → **không** xoá Telegram (giữ log trên topic).
+ * Chỉ bỏ map message_links để /del sau này không cố undo lại Zalo.
  */
 export function wireZaloUndoSync(api: Api, adapter: ZaloAdapter): void {
   if (!adapter.onUndo) return;
@@ -45,13 +46,13 @@ export function wireZaloUndoSync(api: Api, adapter: ZaloAdapter): void {
     try {
       await handleZaloUndo(api, adapter, undo);
     } catch (err) {
-      logger.error({ err, undo }, 'Zalo undo → Telegram delete failed');
+      logger.error({ err, undo }, 'Zalo undo handler failed');
     }
   });
 }
 
 async function handleZaloUndo(
-  api: Api,
+  _api: Api,
   adapter: ZaloAdapter,
   undo: NormalizedUndo,
 ): Promise<void> {
@@ -75,27 +76,16 @@ async function handleZaloUndo(
     return;
   }
 
-  try {
-    await api.deleteMessage(link.telegramChatId, link.telegramMessageId);
-    logger.info(
-      {
-        zaloMsgId,
-        telegramMessageId: link.telegramMessageId,
-        topicId: link.telegramTopicId,
-      },
-      'Synced Zalo undo → deleted Telegram message',
-    );
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    // Đã xoá rồi / không còn quyền — vẫn dọn map
-    if (!/message to delete not found|message can't be deleted|MESSAGE_ID_INVALID/i.test(msg)) {
-      logger.warn(
-        { err, zaloMsgId, telegramMessageId: link.telegramMessageId },
-        'Failed to delete Telegram message after Zalo undo',
-      );
-    }
-  }
+  // Giữ nguyên tin trên Telegram làm log — chỉ gỡ liên kết sync
   deleteMessageLink(link.id);
+  logger.info(
+    {
+      zaloMsgId,
+      telegramMessageId: link.telegramMessageId,
+      topicId: link.telegramTopicId,
+    },
+    'Zalo undo noted — Telegram message kept as log',
+  );
 }
 
 /**

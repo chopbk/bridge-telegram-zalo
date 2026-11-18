@@ -128,9 +128,9 @@ Topic (Zalo↔Telegram) **không** thêm chữ ký.
 
 Đồng bộ tự động:
 
-- **Thu hồi trên Zalo** → bot xoá tin đã forward trên Telegram.
+- **Thu hồi trên Zalo** → **không** xoá Telegram (giữ log trên topic); chỉ bỏ liên kết sync.
 - **Sửa tin trên Telegram** (tin admin đã gửi sang Zalo) → thu hồi + gửi lại nội dung mới trên Zalo.
-- Bot API **không** báo khi bạn xoá tin bằng nút Delete trên Telegram → dùng **reply `/del`**.
+- Bot API **không** báo khi bạn xoá tin bằng nút Delete trên Telegram → dùng **reply `/del`** nếu muốn xoá TG **và** thu hồi Zalo.
 - Zalo (zca-js) **không** có API sửa tin; sửa phía Zalo app không sync sang Telegram.
 
 Env mặc định (tuỳ chọn): `FORWARD_SIGNATURE=...` — runtime `/signature` ghi đè.
